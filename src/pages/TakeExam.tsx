@@ -325,12 +325,31 @@ const TakeExam = () => {
         })
         .eq('id', sessionId);
 
-      toast({
-        title: 'Exam Submitted',
-        description: 'Your exam has been submitted successfully.',
+      // Trigger automatic evaluation
+      const { data: evalResult, error: evalError } = await supabase.functions.invoke('evaluate-exam', {
+        body: { sessionId },
       });
 
-      navigate('/dashboard');
+      if (evalError) {
+        console.error('Evaluation error:', evalError);
+        // Don't block submission, just show warning
+        toast({
+          title: 'Exam Submitted',
+          description: 'Your exam has been submitted. Results will be available shortly.',
+        });
+      } else {
+        toast({
+          title: 'Exam Submitted',
+          description: 'Your exam has been submitted and evaluated successfully.',
+        });
+      }
+
+      // Navigate to results page if evaluation succeeded, otherwise dashboard
+      if (evalResult?.success) {
+        navigate(`/results/${sessionId}`);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (error) {
       console.error('Error submitting exam:', error);
       toast({
