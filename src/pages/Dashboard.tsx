@@ -272,7 +272,7 @@ const Dashboard = () => {
           {/* For Students */}
           {isStudent && (
             <>
-              <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/exams/available')}>
+              <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/exams')}>
                 <CardHeader>
                   <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-2 group-hover:bg-primary/20 transition-colors">
                     <FileText className="h-6 w-6 text-primary" />
