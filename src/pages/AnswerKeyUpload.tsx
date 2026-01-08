@@ -1,0 +1,413 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/hooks/use-toast';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, Save, CheckCircle, AlertCircle } from 'lucide-react';
+
+interface Question {
+  id: string;
+  question_text: string;
+  question_type: 'single_correct' | 'multiple_correct' | 'numerical';
+  options: { id: string; text: string }[];
+  correct_answer: string | string[] | number | null;
+  order_index: number;
+  section_id: string | null;
+}
+
+interface Section {
+  id: string;
+  name: string;
+  order_index: number;
+}
+
+export default function AnswerKeyUpload() {
+  const { examId } = useParams<{ examId: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  const [examTitle, setExamTitle] = useState('');
+  const [sections, setSections] = useState<Section[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string | string[] | number>>({});
+  const [existingAnswerKey, setExistingAnswerKey] = useState<{ id: string; version: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (examId) {
+      fetchExamData();
+    }
+  }, [examId]);
+
+  const fetchExamData = async () => {
+    try {
+      // Fetch exam
+      const { data: exam, error: examError } = await supabase
+        .from('exams')
+        .select('title')
+        .eq('id', examId)
+        .single();
+
+      if (examError) throw examError;
+      setExamTitle(exam.title);
+
+      // Fetch sections
+      const { data: sectionsData, error: sectionsError } = await supabase
+        .from('exam_sections')
+        .select('id, name, order_index')
+        .eq('exam_id', examId)
+        .order('order_index');
+
+      if (sectionsError) throw sectionsError;
+      setSections(sectionsData || []);
+
+      // Fetch questions
+      const { data: questionsData, error: questionsError } = await supabase
+        .from('questions')
+        .select('id, question_text, question_type, options, correct_answer, order_index, section_id')
+        .eq('exam_id', examId)
+        .order('order_index');
+
+      if (questionsError) throw questionsError;
+      
+      const typedQuestions: Question[] = (questionsData || []).map(q => ({
+        id: q.id,
+        question_text: q.question_text,
+        question_type: q.question_type as 'single_correct' | 'multiple_correct' | 'numerical',
+        options: Array.isArray(q.options) ? q.options as { id: string; text: string }[] : [],
+        correct_answer: q.correct_answer as string | string[] | number | null,
+        order_index: q.order_index,
+        section_id: q.section_id,
+      }));
+      setQuestions(typedQuestions);
+
+      // Initialize answers from questions' correct_answer
+      const initialAnswers: Record<string, string | string[] | number> = {};
+      typedQuestions.forEach((q) => {
+        if (q.correct_answer !== null && q.correct_answer !== undefined) {
+          initialAnswers[q.id] = q.correct_answer;
+        }
+      });
+
+      // Check for existing answer key
+      const { data: answerKey } = await supabase
+        .from('answer_keys')
+        .select('id, version, answers')
+        .eq('exam_id', examId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (answerKey) {
+        setExistingAnswerKey({ id: answerKey.id, version: answerKey.version || 1 });
+        // Merge answer key answers with initial answers
+        const keyAnswers = answerKey.answers as Record<string, string | string[] | number>;
+        Object.assign(initialAnswers, keyAnswers);
+      }
+
+      setAnswers(initialAnswers);
+    } catch (error) {
+      console.error('Error fetching exam data:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load exam data.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSingleAnswerChange = (questionId: string, optionId: string) => {
+    setAnswers((prev) => ({ ...prev, [questionId]: optionId }));
+  };
+
+  const handleMultipleAnswerChange = (questionId: string, optionId: string, checked: boolean) => {
+    setAnswers((prev) => {
+      const current = Array.isArray(prev[questionId]) ? [...(prev[questionId] as string[])] : [];
+      if (checked) {
+        return { ...prev, [questionId]: [...current, optionId] };
+      } else {
+        return { ...prev, [questionId]: current.filter((id) => id !== optionId) };
+      }
+    });
+  };
+
+  const handleNumericalAnswerChange = (questionId: string, value: string) => {
+    const numValue = parseFloat(value);
+    if (!isNaN(numValue)) {
+      setAnswers((prev) => ({ ...prev, [questionId]: numValue }));
+    } else if (value === '' || value === '-') {
+      setAnswers((prev) => {
+        const newAnswers = { ...prev };
+        delete newAnswers[questionId];
+        return newAnswers;
+      });
+    }
+  };
+
+  const handleSave = async () => {
+    if (!examId || !user) return;
+
+    setSaving(true);
+    try {
+      // Update questions' correct_answer
+      for (const question of questions) {
+        const answer = answers[question.id];
+        if (answer !== undefined) {
+          await supabase
+            .from('questions')
+            .update({ correct_answer: answer })
+            .eq('id', question.id);
+        }
+      }
+
+      // Save/update answer key
+      if (existingAnswerKey) {
+        await supabase
+          .from('answer_keys')
+          .update({
+            answers,
+            version: existingAnswerKey.version + 1,
+            uploaded_by: user.id,
+          })
+          .eq('id', existingAnswerKey.id);
+      } else {
+        await supabase.from('answer_keys').insert({
+          exam_id: examId,
+          answers,
+          uploaded_by: user.id,
+          version: 1,
+        });
+      }
+
+      toast({
+        title: 'Answer Key Saved',
+        description: 'The answer key has been saved successfully.',
+      });
+
+      navigate(`/exams/${examId}/manage`);
+    } catch (error) {
+      console.error('Error saving answer key:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to save answer key.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const getAnswerStatus = (questionId: string) => {
+    const answer = answers[questionId];
+    if (answer === undefined || answer === null) return 'unanswered';
+    if (Array.isArray(answer) && answer.length === 0) return 'unanswered';
+    return 'answered';
+  };
+
+  const getQuestionsBySection = (sectionId: string | null) => {
+    return questions.filter((q) => q.section_id === sectionId);
+  };
+
+  const answeredCount = questions.filter((q) => getAnswerStatus(q.id) === 'answered').length;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background p-6">
+        <div className="max-w-4xl mx-auto space-y-6">
+          <Skeleton className="h-10 w-64" />
+          <Skeleton className="h-[600px] w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-background border-b">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            <div>
+              <h1 className="text-xl font-semibold">Answer Key</h1>
+              <p className="text-sm text-muted-foreground">{examTitle}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <Badge variant="outline" className="text-sm">
+              {answeredCount} / {questions.length} answered
+            </Badge>
+            <Button onClick={handleSave} disabled={saving}>
+              <Save className="h-4 w-4 mr-2" />
+              {saving ? 'Saving...' : 'Save Answer Key'}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-4xl mx-auto p-6 space-y-6">
+        {sections.length > 0 ? (
+          sections.map((section) => (
+            <Card key={section.id}>
+              <CardHeader>
+                <CardTitle>{section.name}</CardTitle>
+                <CardDescription>
+                  {getQuestionsBySection(section.id).length} questions
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {getQuestionsBySection(section.id).map((question, idx) => (
+                  <QuestionAnswerInput
+                    key={question.id}
+                    question={question}
+                    questionNumber={idx + 1}
+                    answer={answers[question.id]}
+                    onSingleChange={handleSingleAnswerChange}
+                    onMultipleChange={handleMultipleAnswerChange}
+                    onNumericalChange={handleNumericalAnswerChange}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+          ))
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>Questions</CardTitle>
+              <CardDescription>{questions.length} questions</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {questions.map((question, idx) => (
+                <QuestionAnswerInput
+                  key={question.id}
+                  question={question}
+                  questionNumber={idx + 1}
+                  answer={answers[question.id]}
+                  onSingleChange={handleSingleAnswerChange}
+                  onMultipleChange={handleMultipleAnswerChange}
+                  onNumericalChange={handleNumericalAnswerChange}
+                />
+              ))}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface QuestionAnswerInputProps {
+  question: Question;
+  questionNumber: number;
+  answer: string | string[] | number | undefined;
+  onSingleChange: (questionId: string, optionId: string) => void;
+  onMultipleChange: (questionId: string, optionId: string, checked: boolean) => void;
+  onNumericalChange: (questionId: string, value: string) => void;
+}
+
+function QuestionAnswerInput({
+  question,
+  questionNumber,
+  answer,
+  onSingleChange,
+  onMultipleChange,
+  onNumericalChange,
+}: QuestionAnswerInputProps) {
+  const hasAnswer = answer !== undefined && answer !== null && 
+    (!Array.isArray(answer) || answer.length > 0);
+
+  return (
+    <div className="border rounded-lg p-4 space-y-3">
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="font-medium">Q{questionNumber}.</span>
+            <Badge variant="secondary" className="text-xs">
+              {question.question_type.replace('_', ' ')}
+            </Badge>
+            {hasAnswer ? (
+              <CheckCircle className="h-4 w-4 text-green-500" />
+            ) : (
+              <AlertCircle className="h-4 w-4 text-muted-foreground" />
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            {question.question_text}
+          </p>
+        </div>
+      </div>
+
+      <div className="pt-2">
+        {question.question_type === 'single_correct' && (
+          <RadioGroup
+            value={String(answer || '')}
+            onValueChange={(value) => onSingleChange(question.id, value)}
+            className="grid grid-cols-2 gap-2"
+          >
+            {question.options.map((option) => (
+              <div key={option.id} className="flex items-center space-x-2">
+                <RadioGroupItem value={option.id} id={`${question.id}-${option.id}`} />
+                <Label htmlFor={`${question.id}-${option.id}`} className="text-sm cursor-pointer">
+                  {option.text}
+                </Label>
+              </div>
+            ))}
+          </RadioGroup>
+        )}
+
+        {question.question_type === 'multiple_correct' && (
+          <div className="grid grid-cols-2 gap-2">
+            {question.options.map((option) => {
+              const selectedAnswers = Array.isArray(answer) ? answer : [];
+              return (
+                <div key={option.id} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`${question.id}-${option.id}`}
+                    checked={selectedAnswers.includes(option.id)}
+                    onCheckedChange={(checked) =>
+                      onMultipleChange(question.id, option.id, checked as boolean)
+                    }
+                  />
+                  <Label htmlFor={`${question.id}-${option.id}`} className="text-sm cursor-pointer">
+                    {option.text}
+                  </Label>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {question.question_type === 'numerical' && (
+          <div className="max-w-xs">
+            <Label htmlFor={`numerical-${question.id}`} className="text-sm mb-1 block">
+              Correct Answer
+            </Label>
+            <Input
+              id={`numerical-${question.id}`}
+              type="number"
+              step="any"
+              value={answer !== undefined ? String(answer) : ''}
+              onChange={(e) => onNumericalChange(question.id, e.target.value)}
+              placeholder="Enter numerical answer"
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
