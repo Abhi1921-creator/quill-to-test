@@ -9,6 +9,7 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import CreateExam from "./pages/CreateExam";
 import TakeExam from "./pages/TakeExam";
+import AvailableExams from "./pages/AvailableExams";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/exams/create" element={<CreateExam />} />
             <Route path="/exams/:examId/take" element={<TakeExam />} />
+            <Route path="/exams" element={<AvailableExams />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
