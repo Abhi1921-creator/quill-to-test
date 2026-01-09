@@ -203,10 +203,10 @@ const CreateExam = () => {
 
       toast({
         title: 'Exam created!',
-        description: `"${examConfig.title}" has been saved as a draft.`,
+        description: `"${examConfig.title}" has been saved as a draft. Set up the answer key next.`,
       });
 
-      navigate('/dashboard');
+      navigate(`/exams/${exam.id}/answer-key`);
     } catch (error) {
       console.error('Save error:', error);
       toast({
