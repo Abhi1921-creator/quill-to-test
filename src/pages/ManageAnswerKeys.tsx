@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, KeyRound, FileText, Check, AlertCircle } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { ArrowLeft, KeyRound, FileText, Check, AlertCircle, Globe, EyeOff } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface ExamWithAnswerKey {
   id: string;
@@ -90,6 +92,29 @@ const ManageAnswerKeys = () => {
     }
   }, [profile]);
 
+  const togglePublishStatus = async (examId: string, currentStatus: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newStatus = currentStatus === 'published' ? 'draft' : 'published';
+    
+    try {
+      const { error } = await supabase
+        .from('exams')
+        .update({ status: newStatus })
+        .eq('id', examId);
+
+      if (error) throw error;
+
+      setExams(prev => prev.map(exam => 
+        exam.id === examId ? { ...exam, status: newStatus } : exam
+      ));
+      
+      toast.success(`Exam ${newStatus === 'published' ? 'published' : 'unpublished'} successfully`);
+    } catch (error) {
+      console.error('Error updating exam status:', error);
+      toast.error('Failed to update exam status');
+    }
+  };
+
   if (authLoading || isLoading) {
     return (
       <div className="min-h-screen bg-background">
@@ -156,7 +181,7 @@ const ManageAnswerKeys = () => {
               >
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
-                    <div>
+                    <div className="flex-1">
                       <CardTitle className="text-lg">{exam.title}</CardTitle>
                       {exam.description && (
                         <CardDescription className="mt-1">
@@ -164,9 +189,26 @@ const ManageAnswerKeys = () => {
                         </CardDescription>
                       )}
                     </div>
-                    <Badge variant={exam.status === 'published' ? 'default' : 'secondary'}>
-                      {exam.status}
-                    </Badge>
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="flex items-center gap-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {exam.status === 'published' ? (
+                          <Globe className="h-4 w-4 text-success" />
+                        ) : (
+                          <EyeOff className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <Switch
+                          checked={exam.status === 'published'}
+                          onCheckedChange={() => {}}
+                          onClick={(e) => togglePublishStatus(exam.id, exam.status, e)}
+                        />
+                      </div>
+                      <Badge variant={exam.status === 'published' ? 'default' : 'secondary'}>
+                        {exam.status}
+                      </Badge>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
