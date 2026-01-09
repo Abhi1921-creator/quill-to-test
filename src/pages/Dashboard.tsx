@@ -14,7 +14,8 @@ import {
   ChevronRight,
   LogOut,
   Settings,
-  Building2
+  Building2,
+  KeyRound
 } from 'lucide-react';
 
 const Dashboard = () => {
@@ -244,6 +245,23 @@ const Dashboard = () => {
                 <CardContent>
                   <Button variant="ghost" className="p-0 h-auto text-accent">
                     View All <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/exams/answer-keys')}>
+                <CardHeader>
+                  <div className="w-12 h-12 rounded-xl bg-success/10 flex items-center justify-center mb-2 group-hover:bg-success/20 transition-colors">
+                    <KeyRound className="h-6 w-6 text-success" />
+                  </div>
+                  <CardTitle>Manage Answer Keys</CardTitle>
+                  <CardDescription>
+                    Set or update correct answers for your exams to enable automatic evaluation.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button variant="ghost" className="p-0 h-auto text-success">
+                    Manage Keys <ChevronRight className="ml-1 h-4 w-4" />
                   </Button>
                 </CardContent>
               </Card>

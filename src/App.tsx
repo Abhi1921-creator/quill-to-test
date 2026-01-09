@@ -12,6 +12,7 @@ import TakeExam from "./pages/TakeExam";
 import AvailableExams from "./pages/AvailableExams";
 import AnswerKeyUpload from "./pages/AnswerKeyUpload";
 import ExamResults from "./pages/ExamResults";
+import ManageAnswerKeys from "./pages/ManageAnswerKeys";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/exams/create" element={<CreateExam />} />
             <Route path="/exams/:examId/take" element={<TakeExam />} />
             <Route path="/exams/:examId/answer-key" element={<AnswerKeyUpload />} />
+            <Route path="/exams/answer-keys" element={<ManageAnswerKeys />} />
             <Route path="/exams" element={<AvailableExams />} />
             <Route path="/results/:sessionId" element={<ExamResults />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
