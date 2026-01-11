@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
 type AppRole = 'super_admin' | 'institute_admin' | 'teacher' | 'student';
+type SignUpRole = 'student' | 'teacher';
 
 interface UserRole {
   id: string;
@@ -25,7 +26,7 @@ interface AuthContextType {
   profile: Profile | null;
   roles: UserRole[];
   isLoading: boolean;
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, fullName: string, role: SignUpRole) => Promise<{ error: Error | null }>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   hasRole: (role: AppRole, instituteId?: string) => boolean;
@@ -102,22 +103,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => subscription.unsubscribe();
   }, []);
 
-  const signUp = async (email: string, password: string, fullName: string) => {
+  const signUp = async (email: string, password: string, fullName: string, role: SignUpRole) => {
     const redirectUrl = `${window.location.origin}/`;
     
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         emailRedirectTo: redirectUrl,
         data: {
           full_name: fullName,
+          role: role,
         },
       },
     });
 
     if (error) {
       return { error };
+    }
+
+    // Create user role after successful signup
+    if (data.user) {
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert({
+          user_id: data.user.id,
+          role: role,
+        });
+
+      if (roleError) {
+        console.error('Error creating user role:', roleError);
+        // Don't fail signup if role creation fails - profile trigger should handle it
+      }
     }
 
     toast.success('Account created successfully! You can now sign in.');
