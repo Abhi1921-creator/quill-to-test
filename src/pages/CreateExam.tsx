@@ -115,15 +115,6 @@ const CreateExam = () => {
   };
 
   const handleSaveExam = async () => {
-    if (!profile?.institute_id) {
-      toast({
-        title: 'No institute',
-        description: 'You need to be associated with an institute to create exams.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
     if (!examConfig.title) {
       toast({
         title: 'Title required',
@@ -148,7 +139,7 @@ const CreateExam = () => {
         .insert({
           title: examConfig.title,
           description: examConfig.description,
-          institute_id: profile.institute_id,
+          institute_id: profile?.institute_id || null,
           exam_type: examType || 'custom',
           duration_minutes: examConfig.duration_minutes,
           instructions: examConfig.instructions,
