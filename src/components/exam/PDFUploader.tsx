@@ -28,7 +28,10 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
   const extractTextFromPDF = async (pdfFile: File): Promise<string> => {
     // Use pdf.js to extract text
     const pdfjsLib = await import('pdfjs-dist');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+    
+    // For pdfjs-dist v5+, use the mjs worker from CDN
+    const workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.0.375/pdf.worker.min.mjs`;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
     const arrayBuffer = await pdfFile.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
