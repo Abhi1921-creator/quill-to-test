@@ -30,9 +30,11 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
     // Use pdf.js to extract text
     const pdfjsLib = await import('pdfjs-dist');
     
-    // Use the matching worker version from CDN (must match pdfjs-dist package version 5.4.530)
-    const workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.530/pdf.worker.min.mjs`;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+    // Use import.meta.url to resolve the worker path for Vite
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.mjs',
+      import.meta.url
+    ).toString();
 
     const arrayBuffer = await pdfFile.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
