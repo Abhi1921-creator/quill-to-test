@@ -30,8 +30,8 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
     // Use pdf.js to extract text
     const pdfjsLib = await import('pdfjs-dist');
     
-    // For pdfjs-dist v5+, use the mjs worker from CDN
-    const workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.0.375/pdf.worker.min.mjs`;
+    // Use the matching worker version from CDN (must match pdfjs-dist package version 5.4.530)
+    const workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.4.530/pdf.worker.min.mjs`;
     pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
     const arrayBuffer = await pdfFile.arrayBuffer();
