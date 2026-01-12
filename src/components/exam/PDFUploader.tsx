@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Upload, FileText, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -14,6 +14,7 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [extractingText, setExtractingText] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -85,6 +86,10 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
     }
   };
 
+  const handleButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
   const removeFile = () => {
     setFile(null);
   };
@@ -137,9 +142,10 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onClick={handleButtonClick}
     >
       <CardContent className="p-12">
-        <label className="flex flex-col items-center gap-4 cursor-pointer">
+        <div className="flex flex-col items-center gap-4">
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
             <Upload className="h-8 w-8 text-primary" />
           </div>
@@ -151,16 +157,17 @@ export const PDFUploader = ({ onFileSelect, onTextExtracted, isExtracting }: PDF
               or click to browse files
             </p>
           </div>
-          <Button variant="outline" className="mt-2">
+          <Button variant="outline" className="mt-2" onClick={(e) => { e.stopPropagation(); handleButtonClick(); }}>
             Select PDF File
           </Button>
           <input
+            ref={fileInputRef}
             type="file"
             accept="application/pdf"
             onChange={handleFileInput}
             className="hidden"
           />
-        </label>
+        </div>
       </CardContent>
     </Card>
   );
