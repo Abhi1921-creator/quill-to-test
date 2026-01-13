@@ -82,7 +82,7 @@ Return the response in this exact JSON format:
           },
         ],
         temperature: 0.1,
-        max_tokens: 8000,
+        max_tokens: 32000,
       }),
     });
 
@@ -115,12 +115,43 @@ Return the response in this exact JSON format:
     let extractedData;
     try {
       // Try to find JSON in the response (might be wrapped in markdown code blocks)
-      const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*\}/);
-      const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
+      let jsonStr = content;
+      
+      // Remove markdown code block wrapper if present
+      const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1];
+      }
+      
+      // Find the JSON object
+      const jsonStartIndex = jsonStr.indexOf('{');
+      if (jsonStartIndex !== -1) {
+        jsonStr = jsonStr.substring(jsonStartIndex);
+      }
+      
+      // Try to find the complete JSON by matching braces
+      let braceCount = 0;
+      let jsonEndIndex = -1;
+      for (let i = 0; i < jsonStr.length; i++) {
+        if (jsonStr[i] === '{') braceCount++;
+        if (jsonStr[i] === '}') braceCount--;
+        if (braceCount === 0 && jsonStr[i] === '}') {
+          jsonEndIndex = i + 1;
+          break;
+        }
+      }
+      
+      if (jsonEndIndex > 0) {
+        jsonStr = jsonStr.substring(0, jsonEndIndex);
+      }
+      
       extractedData = JSON.parse(jsonStr);
     } catch (parseError) {
-      console.error("Failed to parse AI response:", content);
-      throw new Error("Failed to parse extracted questions. The AI response format was invalid.");
+      console.error("Failed to parse AI response. Content length:", content.length);
+      console.error("Parse error:", parseError);
+      console.error("First 500 chars:", content.substring(0, 500));
+      console.error("Last 500 chars:", content.substring(content.length - 500));
+      throw new Error("Failed to parse extracted questions. The response may have been truncated. Try with a smaller PDF or fewer pages.");
     }
 
     return new Response(
