@@ -164,7 +164,7 @@ export type Database = {
           ends_at: string | null
           exam_type: Database["public"]["Enums"]["exam_type"]
           id: string
-          institute_id: string
+          institute_id: string | null
           instructions: string | null
           max_attempts: number | null
           negative_marking: boolean | null
@@ -187,7 +187,7 @@ export type Database = {
           ends_at?: string | null
           exam_type?: Database["public"]["Enums"]["exam_type"]
           id?: string
-          institute_id: string
+          institute_id?: string | null
           instructions?: string | null
           max_attempts?: number | null
           negative_marking?: boolean | null
@@ -210,7 +210,7 @@ export type Database = {
           ends_at?: string | null
           exam_type?: Database["public"]["Enums"]["exam_type"]
           id?: string
-          institute_id?: string
+          institute_id?: string | null
           instructions?: string | null
           max_attempts?: number | null
           negative_marking?: boolean | null
