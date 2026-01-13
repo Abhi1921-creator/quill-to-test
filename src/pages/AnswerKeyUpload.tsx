@@ -11,7 +11,9 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Save, CheckCircle, AlertCircle } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { ArrowLeft, Save, CheckCircle, AlertCircle, Upload, FileText, Download } from 'lucide-react';
 
 interface Question {
   id: string;
@@ -42,6 +44,8 @@ export default function AnswerKeyUpload() {
   const [existingAnswerKey, setExistingAnswerKey] = useState<{ id: string; version: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [bulkInput, setBulkInput] = useState('');
+  const [activeTab, setActiveTab] = useState<string>('manual');
 
   useEffect(() => {
     if (examId) {
@@ -222,6 +226,103 @@ export default function AnswerKeyUpload() {
 
   const answeredCount = questions.filter((q) => getAnswerStatus(q.id) === 'answered').length;
 
+  // Generate template for bulk upload
+  const generateTemplate = () => {
+    const lines = questions.map((q, idx) => {
+      const qNum = idx + 1;
+      if (q.question_type === 'single_correct') {
+        const optionLabels = q.options.map((_, i) => String.fromCharCode(65 + i)).join('/');
+        return `Q${qNum}: ${optionLabels}`;
+      } else if (q.question_type === 'multiple_correct') {
+        const optionLabels = q.options.map((_, i) => String.fromCharCode(65 + i)).join(',');
+        return `Q${qNum}: ${optionLabels} (multiple, e.g., A,C)`;
+      } else {
+        return `Q${qNum}: [numerical value]`;
+      }
+    });
+    setBulkInput(lines.join('\n'));
+  };
+
+  // Export current answers as text
+  const exportAnswers = () => {
+    const lines = questions.map((q, idx) => {
+      const qNum = idx + 1;
+      const answer = answers[q.id];
+      if (!answer) return `Q${qNum}: `;
+      
+      if (q.question_type === 'single_correct') {
+        const optionIndex = q.options.findIndex(opt => opt.id === answer);
+        return `Q${qNum}: ${optionIndex >= 0 ? String.fromCharCode(65 + optionIndex) : ''}`;
+      } else if (q.question_type === 'multiple_correct' && Array.isArray(answer)) {
+        const labels = answer.map(a => {
+          const idx = q.options.findIndex(opt => opt.id === a);
+          return idx >= 0 ? String.fromCharCode(65 + idx) : '';
+        }).filter(Boolean).sort().join(',');
+        return `Q${qNum}: ${labels}`;
+      } else {
+        return `Q${qNum}: ${answer}`;
+      }
+    });
+    setBulkInput(lines.join('\n'));
+  };
+
+  // Parse bulk input and apply answers
+  const parseBulkInput = () => {
+    const lines = bulkInput.split('\n').filter(line => line.trim());
+    const newAnswers: Record<string, string | string[] | number> = { ...answers };
+    let parsed = 0;
+    
+    for (const line of lines) {
+      // Match patterns like "Q1: A" or "1: A,B,C" or "Q1: 42.5"
+      const match = line.match(/^Q?(\d+)\s*[:\.]\s*(.+)$/i);
+      if (!match) continue;
+      
+      const qNum = parseInt(match[1], 10) - 1;
+      const answerStr = match[2].trim();
+      
+      if (qNum < 0 || qNum >= questions.length) continue;
+      
+      const question = questions[qNum];
+      
+      if (question.question_type === 'single_correct') {
+        // Parse single letter like "A", "B", "C", "D"
+        const letterMatch = answerStr.match(/^([A-Da-d])$/);
+        if (letterMatch) {
+          const optionIndex = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+          if (optionIndex >= 0 && optionIndex < question.options.length) {
+            newAnswers[question.id] = question.options[optionIndex].id;
+            parsed++;
+          }
+        }
+      } else if (question.question_type === 'multiple_correct') {
+        // Parse multiple letters like "A,C" or "A, B, D"
+        const letters = answerStr.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(s => /^[A-D]$/.test(s));
+        const optionIds = letters.map(letter => {
+          const idx = letter.charCodeAt(0) - 65;
+          return idx >= 0 && idx < question.options.length ? question.options[idx].id : null;
+        }).filter(Boolean) as string[];
+        if (optionIds.length > 0) {
+          newAnswers[question.id] = optionIds;
+          parsed++;
+        }
+      } else if (question.question_type === 'numerical') {
+        // Parse numerical value
+        const numValue = parseFloat(answerStr);
+        if (!isNaN(numValue)) {
+          newAnswers[question.id] = numValue;
+          parsed++;
+        }
+      }
+    }
+    
+    setAnswers(newAnswers);
+    toast({
+      title: 'Answers Imported',
+      description: `Successfully parsed ${parsed} answers from bulk input.`,
+    });
+    setActiveTab('manual');
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background p-6">
@@ -261,51 +362,117 @@ export default function AnswerKeyUpload() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {sections.length > 0 ? (
-          sections.map((section) => (
-            <Card key={section.id}>
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsTrigger value="manual" className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Manual Entry
+            </TabsTrigger>
+            <TabsTrigger value="bulk" className="flex items-center gap-2">
+              <Upload className="h-4 w-4" />
+              Bulk Upload
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="bulk" className="space-y-4">
+            <Card>
               <CardHeader>
-                <CardTitle>{section.name}</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Upload className="h-5 w-5" />
+                  Bulk Answer Upload
+                </CardTitle>
                 <CardDescription>
-                  {getQuestionsBySection(section.id).length} questions
+                  Paste or type answers in bulk format. Use A, B, C, D for options. For multiple correct answers, separate with commas (e.g., A,C).
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-6">
-                {getQuestionsBySection(section.id).map((question, idx) => (
-                  <QuestionAnswerInput
-                    key={question.id}
-                    question={question}
-                    questionNumber={idx + 1}
-                    answer={answers[question.id]}
-                    onSingleChange={handleSingleAnswerChange}
-                    onMultipleChange={handleMultipleAnswerChange}
-                    onNumericalChange={handleNumericalAnswerChange}
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={generateTemplate}>
+                    <FileText className="h-4 w-4 mr-2" />
+                    Generate Template
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={exportAnswers}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Current Answers
+                  </Button>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="bulk-input">Answer Key (one per line)</Label>
+                  <Textarea
+                    id="bulk-input"
+                    value={bulkInput}
+                    onChange={(e) => setBulkInput(e.target.value)}
+                    placeholder={`Q1: A\nQ2: B,C\nQ3: D\nQ4: 42.5\n...`}
+                    className="min-h-[300px] font-mono text-sm"
                   />
-                ))}
+                </div>
+
+                <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2">
+                  <p className="font-medium">Format Instructions:</p>
+                  <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                    <li><code className="bg-muted px-1 rounded">Q1: A</code> - Single correct (option A)</li>
+                    <li><code className="bg-muted px-1 rounded">Q2: A,C</code> - Multiple correct (options A and C)</li>
+                    <li><code className="bg-muted px-1 rounded">Q3: 42.5</code> - Numerical answer</li>
+                  </ul>
+                </div>
+
+                <Button onClick={parseBulkInput} className="w-full">
+                  <Upload className="h-4 w-4 mr-2" />
+                  Apply Bulk Answers
+                </Button>
               </CardContent>
             </Card>
-          ))
-        ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle>Questions</CardTitle>
-              <CardDescription>{questions.length} questions</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {questions.map((question, idx) => (
-                <QuestionAnswerInput
-                  key={question.id}
-                  question={question}
-                  questionNumber={idx + 1}
-                  answer={answers[question.id]}
-                  onSingleChange={handleSingleAnswerChange}
-                  onMultipleChange={handleMultipleAnswerChange}
-                  onNumericalChange={handleNumericalAnswerChange}
-                />
-              ))}
-            </CardContent>
-          </Card>
-        )}
+          </TabsContent>
+
+          <TabsContent value="manual" className="space-y-6">
+            {sections.length > 0 ? (
+              sections.map((section) => (
+                <Card key={section.id}>
+                  <CardHeader>
+                    <CardTitle>{section.name}</CardTitle>
+                    <CardDescription>
+                      {getQuestionsBySection(section.id).length} questions
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {getQuestionsBySection(section.id).map((question, idx) => (
+                      <QuestionAnswerInput
+                        key={question.id}
+                        question={question}
+                        questionNumber={idx + 1}
+                        answer={answers[question.id]}
+                        onSingleChange={handleSingleAnswerChange}
+                        onMultipleChange={handleMultipleAnswerChange}
+                        onNumericalChange={handleNumericalAnswerChange}
+                      />
+                    ))}
+                  </CardContent>
+                </Card>
+              ))
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Questions</CardTitle>
+                  <CardDescription>{questions.length} questions</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {questions.map((question, idx) => (
+                    <QuestionAnswerInput
+                      key={question.id}
+                      question={question}
+                      questionNumber={idx + 1}
+                      answer={answers[question.id]}
+                      onSingleChange={handleSingleAnswerChange}
+                      onMultipleChange={handleMultipleAnswerChange}
+                      onNumericalChange={handleNumericalAnswerChange}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
