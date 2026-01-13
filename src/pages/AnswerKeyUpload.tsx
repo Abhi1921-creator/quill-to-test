@@ -18,7 +18,7 @@ import { ArrowLeft, Save, CheckCircle, AlertCircle, Upload, FileText, Download }
 interface Question {
   id: string;
   question_text: string;
-  question_type: 'single_correct' | 'multiple_correct' | 'numerical';
+  question_type: 'single_correct' | 'multiple_correct' | 'true_false' | 'numeric';
   options: { id: string; text: string }[];
   correct_answer: string | string[] | number | null;
   order_index: number;
@@ -87,7 +87,7 @@ export default function AnswerKeyUpload() {
       const typedQuestions: Question[] = (questionsData || []).map(q => ({
         id: q.id,
         question_text: q.question_text,
-        question_type: q.question_type as 'single_correct' | 'multiple_correct' | 'numerical',
+        question_type: q.question_type as 'single_correct' | 'multiple_correct' | 'true_false' | 'numeric',
         options: Array.isArray(q.options) ? q.options as { id: string; text: string }[] : [],
         correct_answer: q.correct_answer as string | string[] | number | null,
         order_index: q.order_index,
@@ -236,8 +236,10 @@ export default function AnswerKeyUpload() {
       } else if (q.question_type === 'multiple_correct') {
         const optionLabels = q.options.map((_, i) => String.fromCharCode(65 + i)).join(',');
         return `Q${qNum}: ${optionLabels} (multiple, e.g., A,C)`;
-      } else {
+      } else if (q.question_type === 'numeric') {
         return `Q${qNum}: [numerical value]`;
+      } else {
+        return `Q${qNum}: [true/false]`;
       }
     });
     setBulkInput(lines.join('\n'));
@@ -305,7 +307,7 @@ export default function AnswerKeyUpload() {
           newAnswers[question.id] = optionIds;
           parsed++;
         }
-      } else if (question.question_type === 'numerical') {
+      } else if (question.question_type === 'numeric') {
         // Parse numerical value
         const numValue = parseFloat(answerStr);
         if (!isNaN(numValue)) {
@@ -520,7 +522,7 @@ function QuestionAnswerInput({
       </div>
 
       <div className="pt-2">
-        {question.question_type === 'single_correct' && (
+        {(question.question_type === 'single_correct' || question.question_type === 'true_false') && (
           <RadioGroup
             value={String(answer || '')}
             onValueChange={(value) => onSingleChange(question.id, value)}
@@ -559,13 +561,13 @@ function QuestionAnswerInput({
           </div>
         )}
 
-        {question.question_type === 'numerical' && (
+        {question.question_type === 'numeric' && (
           <div className="max-w-xs">
-            <Label htmlFor={`numerical-${question.id}`} className="text-sm mb-1 block">
+            <Label htmlFor={`numeric-${question.id}`} className="text-sm mb-1 block">
               Correct Answer
             </Label>
             <Input
-              id={`numerical-${question.id}`}
+              id={`numeric-${question.id}`}
               type="number"
               step="any"
               value={answer !== undefined ? String(answer) : ''}
