@@ -92,15 +92,32 @@ export default function AnswerKeyUpload() {
 
       if (questionsError) throw questionsError;
       
-      const typedQuestions: Question[] = (questionsData || []).map(q => ({
-        id: q.id,
-        question_text: q.question_text,
-        question_type: q.question_type as 'single_correct' | 'multiple_correct' | 'true_false' | 'numeric',
-        options: Array.isArray(q.options) ? q.options as { id: string; text: string }[] : [],
-        correct_answer: q.correct_answer as string | string[] | number | null,
-        order_index: q.order_index,
-        section_id: q.section_id,
-      }));
+      const typedQuestions: Question[] = (questionsData || []).map(q => {
+        // Handle both array of strings and array of {id, text} objects
+        let normalizedOptions: { id: string; text: string }[] = [];
+        if (Array.isArray(q.options)) {
+          normalizedOptions = q.options.map((opt: any, idx: number) => {
+            if (typeof opt === 'string') {
+              // Options are stored as plain strings - create id from index
+              return { id: String.fromCharCode(65 + idx), text: opt };
+            } else if (opt && typeof opt === 'object') {
+              // Options are already objects with id and text
+              return { id: opt.id || String.fromCharCode(65 + idx), text: opt.text || String(opt) };
+            }
+            return { id: String.fromCharCode(65 + idx), text: String(opt) };
+          });
+        }
+        
+        return {
+          id: q.id,
+          question_text: q.question_text,
+          question_type: q.question_type as 'single_correct' | 'multiple_correct' | 'true_false' | 'numeric',
+          options: normalizedOptions,
+          correct_answer: q.correct_answer as string | string[] | number | null,
+          order_index: q.order_index,
+          section_id: q.section_id,
+        };
+      });
       setQuestions(typedQuestions);
 
       // Initialize answers from questions' correct_answer
@@ -416,6 +433,8 @@ export default function AnswerKeyUpload() {
   };
 
   const applyExtractedAnswers = (extractedAnswers: { questionNumber: number; answer: string }[]) => {
+    console.log('Applying extracted answers:', extractedAnswers);
+    console.log('Questions available:', questions.length, questions.slice(0, 3));
     const newAnswers: Record<string, string | string[] | number> = { ...answers };
     let applied = 0;
     
@@ -474,7 +493,17 @@ export default function AnswerKeyUpload() {
       }
     }
     
+    console.log('Applied answers:', applied, 'New answers state:', newAnswers);
     setAnswers(newAnswers);
+    
+    // Show success message with applied count
+    if (applied > 0) {
+      toast({
+        title: 'Answers Applied',
+        description: `Successfully applied ${applied} answers to questions.`,
+      });
+    }
+    
     setActiveTab('manual');
   };
 
