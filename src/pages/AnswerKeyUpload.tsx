@@ -411,10 +411,76 @@ export default function AnswerKeyUpload() {
       if (error) throw error;
       
       if (data.success && data.data?.answers) {
-        applyExtractedAnswers(data.data.answers);
+        // Apply answers directly here with current questions reference
+        const extractedAnswers = data.data.answers as { questionNumber: number; answer: string }[];
+        console.log('Applying extracted answers:', extractedAnswers.length);
+        console.log('Questions available:', questions.length);
+        
+        const newAnswers: Record<string, string | string[] | number> = { ...answers };
+        let applied = 0;
+        
+        for (const extracted of extractedAnswers) {
+          const qIndex = extracted.questionNumber - 1;
+          if (qIndex < 0 || qIndex >= questions.length) continue;
+          
+          const question = questions[qIndex];
+          const answerStr = extracted.answer?.toString().trim();
+          if (!answerStr) continue;
+          
+          if (question.question_type === 'single_correct' || question.question_type === 'true_false') {
+            // Handle single letter answer (A, B, C, D)
+            const letterMatch = answerStr.match(/^([A-Da-d])$/i);
+            if (letterMatch) {
+              const optionIndex = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+              if (optionIndex >= 0 && optionIndex < question.options.length) {
+                newAnswers[question.id] = question.options[optionIndex].id;
+                applied++;
+                console.log(`Q${extracted.questionNumber}: ${answerStr} -> option ${question.options[optionIndex].id}`);
+              }
+            } else if (question.question_type === 'true_false') {
+              const lower = answerStr.toLowerCase();
+              if (lower === 'true' || lower === 't') {
+                const trueOpt = question.options.find(o => o.text.toLowerCase() === 'true');
+                if (trueOpt) {
+                  newAnswers[question.id] = trueOpt.id;
+                  applied++;
+                }
+              } else if (lower === 'false' || lower === 'f') {
+                const falseOpt = question.options.find(o => o.text.toLowerCase() === 'false');
+                if (falseOpt) {
+                  newAnswers[question.id] = falseOpt.id;
+                  applied++;
+                }
+              }
+            }
+          } else if (question.question_type === 'multiple_correct') {
+            const letters = answerStr.split(/[,\s]*/).map(s => s.trim().toUpperCase()).filter(s => /^[A-D]$/.test(s));
+            const optionIds = letters.map(letter => {
+              const idx = letter.charCodeAt(0) - 65;
+              return idx >= 0 && idx < question.options.length ? question.options[idx].id : null;
+            }).filter(Boolean) as string[];
+            if (optionIds.length > 0) {
+              newAnswers[question.id] = optionIds;
+              applied++;
+            }
+          } else if (question.question_type === 'numeric') {
+            const numValue = parseFloat(answerStr);
+            if (!isNaN(numValue)) {
+              newAnswers[question.id] = numValue;
+              applied++;
+            }
+          }
+        }
+        
+        console.log('Applied answers count:', applied);
+        console.log('New answers object:', newAnswers);
+        
+        setAnswers(newAnswers);
+        setActiveTab('manual');
+        
         toast({
-          title: 'Answers Extracted',
-          description: `Successfully extracted ${data.data.answers.length} answers from PDF.`,
+          title: 'Answers Extracted & Applied',
+          description: `Successfully applied ${applied} answers from PDF.`,
         });
       } else {
         throw new Error(data.error || 'Failed to extract answers');
@@ -432,80 +498,7 @@ export default function AnswerKeyUpload() {
     }
   };
 
-  const applyExtractedAnswers = (extractedAnswers: { questionNumber: number; answer: string }[]) => {
-    console.log('Applying extracted answers:', extractedAnswers);
-    console.log('Questions available:', questions.length, questions.slice(0, 3));
-    const newAnswers: Record<string, string | string[] | number> = { ...answers };
-    let applied = 0;
-    
-    for (const extracted of extractedAnswers) {
-      const qIndex = extracted.questionNumber - 1;
-      if (qIndex < 0 || qIndex >= questions.length) continue;
-      
-      const question = questions[qIndex];
-      const answerStr = extracted.answer?.toString().trim();
-      if (!answerStr) continue;
-      
-      if (question.question_type === 'single_correct' || question.question_type === 'true_false') {
-        // Handle single letter answer
-        const letterMatch = answerStr.match(/^([A-Da-d])$/i);
-        if (letterMatch) {
-          const optionIndex = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
-          if (optionIndex >= 0 && optionIndex < question.options.length) {
-            newAnswers[question.id] = question.options[optionIndex].id;
-            applied++;
-          }
-        } else if (question.question_type === 'true_false') {
-          // Handle True/False
-          const lower = answerStr.toLowerCase();
-          if (lower === 'true' || lower === 't') {
-            const trueOpt = question.options.find(o => o.text.toLowerCase() === 'true');
-            if (trueOpt) {
-              newAnswers[question.id] = trueOpt.id;
-              applied++;
-            }
-          } else if (lower === 'false' || lower === 'f') {
-            const falseOpt = question.options.find(o => o.text.toLowerCase() === 'false');
-            if (falseOpt) {
-              newAnswers[question.id] = falseOpt.id;
-              applied++;
-            }
-          }
-        }
-      } else if (question.question_type === 'multiple_correct') {
-        // Handle multiple letters like "A,C" or "AC"
-        const letters = answerStr.split(/[,\s]*/).map(s => s.trim().toUpperCase()).filter(s => /^[A-D]$/.test(s));
-        const optionIds = letters.map(letter => {
-          const idx = letter.charCodeAt(0) - 65;
-          return idx >= 0 && idx < question.options.length ? question.options[idx].id : null;
-        }).filter(Boolean) as string[];
-        if (optionIds.length > 0) {
-          newAnswers[question.id] = optionIds;
-          applied++;
-        }
-      } else if (question.question_type === 'numeric') {
-        // Handle numerical value
-        const numValue = parseFloat(answerStr);
-        if (!isNaN(numValue)) {
-          newAnswers[question.id] = numValue;
-          applied++;
-        }
-      }
-    }
-    
-    console.log('Applied answers:', applied, 'New answers state:', newAnswers);
-    setAnswers(newAnswers);
-    
-    // Show success message with applied count
-    if (applied > 0) {
-      toast({
-        title: 'Answers Applied',
-        description: `Successfully applied ${applied} answers to questions.`,
-      });
-    }
-    
-    setActiveTab('manual');
-  };
+
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
