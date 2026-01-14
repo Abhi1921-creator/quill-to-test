@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -13,7 +13,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { ArrowLeft, Save, CheckCircle, AlertCircle, Upload, FileText, Download } from 'lucide-react';
+import { ArrowLeft, Save, CheckCircle, AlertCircle, Upload, FileText, Download, Loader2, X, FileUp } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface Question {
   id: string;
@@ -46,6 +47,13 @@ export default function AnswerKeyUpload() {
   const [saving, setSaving] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
   const [activeTab, setActiveTab] = useState<string>('manual');
+  
+  // PDF upload state
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [extractingPdf, setExtractingPdf] = useState(false);
+  const [extractingAnswers, setExtractingAnswers] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (examId) {
@@ -325,6 +333,176 @@ export default function AnswerKeyUpload() {
     setActiveTab('manual');
   };
 
+  // PDF upload handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const extractTextFromPDF = async (pdfFile: File): Promise<string> => {
+    const pdfjsLib = await import('pdfjs-dist');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.mjs',
+      import.meta.url
+    ).toString();
+
+    const arrayBuffer = await pdfFile.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ');
+      fullText += `\n--- Page ${i} ---\n${pageText}`;
+    }
+    
+    return fullText;
+  };
+
+  const handlePdfFile = async (file: File) => {
+    if (file.type !== 'application/pdf') {
+      toast({
+        title: 'Invalid file',
+        description: 'Please upload a PDF file.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    setPdfFile(file);
+    
+    try {
+      setExtractingPdf(true);
+      const text = await extractTextFromPDF(file);
+      
+      setExtractingPdf(false);
+      setExtractingAnswers(true);
+      
+      // Call AI to extract answers
+      const { data, error } = await supabase.functions.invoke('extract-answers', {
+        body: { pdfContent: text, totalQuestions: questions.length },
+      });
+      
+      if (error) throw error;
+      
+      if (data.success && data.data?.answers) {
+        applyExtractedAnswers(data.data.answers);
+        toast({
+          title: 'Answers Extracted',
+          description: `Successfully extracted ${data.data.answers.length} answers from PDF.`,
+        });
+      } else {
+        throw new Error(data.error || 'Failed to extract answers');
+      }
+    } catch (error) {
+      console.error('Error extracting answers:', error);
+      toast({
+        title: 'Extraction Failed',
+        description: error instanceof Error ? error.message : 'Failed to extract answers from PDF.',
+        variant: 'destructive',
+      });
+    } finally {
+      setExtractingPdf(false);
+      setExtractingAnswers(false);
+    }
+  };
+
+  const applyExtractedAnswers = (extractedAnswers: { questionNumber: number; answer: string }[]) => {
+    const newAnswers: Record<string, string | string[] | number> = { ...answers };
+    let applied = 0;
+    
+    for (const extracted of extractedAnswers) {
+      const qIndex = extracted.questionNumber - 1;
+      if (qIndex < 0 || qIndex >= questions.length) continue;
+      
+      const question = questions[qIndex];
+      const answerStr = extracted.answer?.toString().trim();
+      if (!answerStr) continue;
+      
+      if (question.question_type === 'single_correct' || question.question_type === 'true_false') {
+        // Handle single letter answer
+        const letterMatch = answerStr.match(/^([A-Da-d])$/i);
+        if (letterMatch) {
+          const optionIndex = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+          if (optionIndex >= 0 && optionIndex < question.options.length) {
+            newAnswers[question.id] = question.options[optionIndex].id;
+            applied++;
+          }
+        } else if (question.question_type === 'true_false') {
+          // Handle True/False
+          const lower = answerStr.toLowerCase();
+          if (lower === 'true' || lower === 't') {
+            const trueOpt = question.options.find(o => o.text.toLowerCase() === 'true');
+            if (trueOpt) {
+              newAnswers[question.id] = trueOpt.id;
+              applied++;
+            }
+          } else if (lower === 'false' || lower === 'f') {
+            const falseOpt = question.options.find(o => o.text.toLowerCase() === 'false');
+            if (falseOpt) {
+              newAnswers[question.id] = falseOpt.id;
+              applied++;
+            }
+          }
+        }
+      } else if (question.question_type === 'multiple_correct') {
+        // Handle multiple letters like "A,C" or "AC"
+        const letters = answerStr.split(/[,\s]*/).map(s => s.trim().toUpperCase()).filter(s => /^[A-D]$/.test(s));
+        const optionIds = letters.map(letter => {
+          const idx = letter.charCodeAt(0) - 65;
+          return idx >= 0 && idx < question.options.length ? question.options[idx].id : null;
+        }).filter(Boolean) as string[];
+        if (optionIds.length > 0) {
+          newAnswers[question.id] = optionIds;
+          applied++;
+        }
+      } else if (question.question_type === 'numeric') {
+        // Handle numerical value
+        const numValue = parseFloat(answerStr);
+        if (!isNaN(numValue)) {
+          newAnswers[question.id] = numValue;
+          applied++;
+        }
+      }
+    }
+    
+    setAnswers(newAnswers);
+    setActiveTab('manual');
+  };
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const droppedFile = e.dataTransfer.files[0];
+    if (droppedFile) {
+      handlePdfFile(droppedFile);
+    }
+  }, [questions]);
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      handlePdfFile(selectedFile);
+    }
+  };
+
+  const handleButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const removePdfFile = () => {
+    setPdfFile(null);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background p-6">
@@ -365,16 +543,115 @@ export default function AnswerKeyUpload() {
       {/* Content */}
       <div className="max-w-4xl mx-auto p-6 space-y-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-2 mb-6">
+          <TabsList className="grid w-full grid-cols-3 mb-6">
             <TabsTrigger value="manual" className="flex items-center gap-2">
               <FileText className="h-4 w-4" />
               Manual Entry
             </TabsTrigger>
+            <TabsTrigger value="pdf" className="flex items-center gap-2">
+              <FileUp className="h-4 w-4" />
+              PDF Upload
+            </TabsTrigger>
             <TabsTrigger value="bulk" className="flex items-center gap-2">
               <Upload className="h-4 w-4" />
-              Bulk Upload
+              Bulk Text
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="pdf" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileUp className="h-5 w-5" />
+                  Upload Answer Key PDF
+                </CardTitle>
+                <CardDescription>
+                  Upload a PDF containing the answer key. AI will automatically extract answers and match them to questions.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {pdfFile ? (
+                  <div className="border-2 border-dashed border-primary/30 bg-primary/5 rounded-lg p-6">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                        <FileText className="h-6 w-6 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{pdfFile.name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {(pdfFile.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                      </div>
+                      {(extractingPdf || extractingAnswers) ? (
+                        <div className="flex items-center gap-2 text-primary">
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                          <span className="text-sm">
+                            {extractingPdf ? 'Reading PDF...' : 'Extracting answers...'}
+                          </span>
+                        </div>
+                      ) : (
+                        <Button 
+                          variant="ghost" 
+                          size="icon"
+                          onClick={removePdfFile}
+                          className="shrink-0"
+                        >
+                          <X className="h-5 w-5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div 
+                    className={cn(
+                      "border-2 border-dashed rounded-lg p-12 transition-colors cursor-pointer",
+                      isDragging 
+                        ? "border-primary bg-primary/5" 
+                        : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/50"
+                    )}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={handleButtonClick}
+                  >
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                        <FileUp className="h-8 w-8 text-primary" />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-lg font-medium">
+                          Drop your answer key PDF here
+                        </p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          or click to browse files
+                        </p>
+                      </div>
+                      <Button variant="outline" className="mt-2" onClick={(e) => { e.stopPropagation(); handleButtonClick(); }}>
+                        Select PDF File
+                      </Button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="application/pdf"
+                        onChange={handleFileInput}
+                        className="hidden"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-muted/50 rounded-lg p-4 text-sm space-y-2 mt-4">
+                  <p className="font-medium">Supported Answer Key Formats:</p>
+                  <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                    <li>Grid/table format with Question No. and Answer columns</li>
+                    <li>List format like "Q1: A, Q2: B, Q3: C"</li>
+                    <li>Answer sheets with numbered answers</li>
+                    <li>Supports single correct, multiple correct, and numerical answers</li>
+                  </ul>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="bulk" className="space-y-4">
             <Card>
