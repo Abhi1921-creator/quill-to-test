@@ -34,15 +34,23 @@ const ManageAnswerKeys = () => {
 
   useEffect(() => {
     const fetchExams = async () => {
-      if (!profile?.institute_id) return;
+      if (!user) return;
 
       try {
         // Fetch exams created by this user or in their institute
-        const { data: examData, error: examError } = await supabase
+        let query = supabase
           .from('exams')
           .select('id, title, description, status, total_marks')
-          .eq('institute_id', profile.institute_id)
           .order('created_at', { ascending: false });
+
+        // Filter by institute if available, otherwise by creator
+        if (profile?.institute_id) {
+          query = query.eq('institute_id', profile.institute_id);
+        } else {
+          query = query.eq('created_by', user.id);
+        }
+
+        const { data: examData, error: examError } = await query;
 
         if (examError) throw examError;
 
@@ -87,10 +95,10 @@ const ManageAnswerKeys = () => {
       }
     };
 
-    if (profile) {
+    if (user) {
       fetchExams();
     }
-  }, [profile]);
+  }, [user, profile]);
 
   const togglePublishStatus = async (examId: string, currentStatus: string, e: React.MouseEvent) => {
     e.stopPropagation();
