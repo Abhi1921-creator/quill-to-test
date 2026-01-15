@@ -149,11 +149,30 @@ const TakeExam = () => {
 
         if (questionsError) throw questionsError;
 
-        const parsedQuestions = (questionsData || []).map((q) => ({
-          ...q,
-          question_type: q.question_type as Question['question_type'],
-          options: (q.options as { id: string; text: string }[]) || [],
-        }));
+        const parsedQuestions = (questionsData || []).map((q) => {
+          // Normalize options: handle both string arrays and object arrays
+          const rawOptions = q.options as unknown;
+          let normalizedOptions: { id: string; text: string }[] = [];
+          
+          if (Array.isArray(rawOptions)) {
+            normalizedOptions = rawOptions.map((opt, idx) => {
+              if (typeof opt === 'string') {
+                // Convert string to object format with letter ID (A, B, C, D...)
+                return { id: String.fromCharCode(65 + idx), text: opt };
+              } else if (opt && typeof opt === 'object' && 'text' in opt) {
+                // Already in object format
+                return opt as { id: string; text: string };
+              }
+              return { id: String.fromCharCode(65 + idx), text: String(opt) };
+            });
+          }
+          
+          return {
+            ...q,
+            question_type: q.question_type as Question['question_type'],
+            options: normalizedOptions,
+          };
+        });
 
         setQuestions(parsedQuestions);
 
