@@ -13,12 +13,54 @@ serve(async (req) => {
   try {
     const { pdfContent, examType } = await req.json();
 
+    // Validate presence
     if (!pdfContent) {
       return new Response(
         JSON.stringify({ error: "PDF content is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Validate type
+    if (typeof pdfContent !== 'string') {
+      return new Response(
+        JSON.stringify({ error: "PDF content must be a string" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate size (500KB max)
+    const maxSize = 500_000;
+    if (pdfContent.length > maxSize) {
+      return new Response(
+        JSON.stringify({ error: `PDF content too large. Maximum ${maxSize / 1000}KB allowed.` }),
+        { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate not empty
+    if (pdfContent.trim().length === 0) {
+      return new Response(
+        JSON.stringify({ error: "PDF content is empty" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate examType enum if provided
+    const validExamTypes = ['ssc', 'banking', 'engineering', 'medical', 'upsc', 'custom'];
+    if (examType && !validExamTypes.includes(examType)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid exam type" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Sanitize content - remove potential prompt injection patterns
+    const sanitizedContent = pdfContent
+      .replace(/ignore previous instructions/gi, '')
+      .replace(/system:/gi, '')
+      .replace(/assistant:/gi, '')
+      .slice(0, maxSize);
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
@@ -78,7 +120,7 @@ Return the response in this exact JSON format:
           { role: "system", content: systemPrompt },
           { 
             role: "user", 
-            content: `Please analyze this exam paper content and extract all questions, options, and sections:\n\n${pdfContent}` 
+            content: `Please analyze this exam paper content and extract all questions, options, and sections:\n\n${sanitizedContent}` 
           },
         ],
         temperature: 0.1,
