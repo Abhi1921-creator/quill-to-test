@@ -13,12 +13,56 @@ serve(async (req) => {
   try {
     const { pdfContent, totalQuestions } = await req.json();
 
+    // Validate presence
     if (!pdfContent) {
       return new Response(
         JSON.stringify({ error: "PDF content is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Validate type
+    if (typeof pdfContent !== 'string') {
+      return new Response(
+        JSON.stringify({ error: "PDF content must be a string" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate size (200KB max for answer keys)
+    const maxSize = 200_000;
+    if (pdfContent.length > maxSize) {
+      return new Response(
+        JSON.stringify({ error: `PDF content too large. Maximum ${maxSize / 1000}KB allowed.` }),
+        { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate not empty
+    if (pdfContent.trim().length === 0) {
+      return new Response(
+        JSON.stringify({ error: "PDF content is empty" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validate totalQuestions if provided
+    if (totalQuestions !== undefined) {
+      const num = typeof totalQuestions === 'number' ? totalQuestions : parseInt(totalQuestions);
+      if (isNaN(num) || num < 1 || num > 500) {
+        return new Response(
+          JSON.stringify({ error: "totalQuestions must be between 1 and 500" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Sanitize content - remove potential prompt injection patterns
+    const sanitizedContent = pdfContent
+      .replace(/ignore previous instructions/gi, '')
+      .replace(/system:/gi, '')
+      .replace(/assistant:/gi, '')
+      .slice(0, maxSize);
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
@@ -72,7 +116,7 @@ Return the response in this exact JSON format:
           { role: "system", content: systemPrompt },
           { 
             role: "user", 
-            content: `Please extract all answers from this answer key document. The exam has approximately ${totalQuestions || 'unknown'} questions:\n\n${pdfContent}` 
+            content: `Please extract all answers from this answer key document. The exam has approximately ${totalQuestions || 'unknown'} questions:\n\n${sanitizedContent}` 
           },
         ],
         temperature: 0.1,
