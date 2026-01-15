@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,15 +19,108 @@ import {
   KeyRound
 } from 'lucide-react';
 
+interface DashboardStats {
+  totalExams: number;
+  completedExams: number;
+  totalAttempts: number;
+  avgScore: number | null;
+}
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, profile, isLoading, signOut, getPrimaryRole, hasRole } = useAuth();
+  const [stats, setStats] = useState<DashboardStats>({
+    totalExams: 0,
+    completedExams: 0,
+    totalAttempts: 0,
+    avgScore: null,
+  });
 
   useEffect(() => {
     if (!isLoading && !user) {
       navigate('/auth');
     }
   }, [user, isLoading, navigate]);
+
+  useEffect(() => {
+    if (user) {
+      fetchStats();
+    }
+  }, [user, profile]);
+
+  const fetchStats = async () => {
+    if (!user) return;
+
+    const isStudentRole = hasRole('student') && !hasRole('teacher') && !hasRole('institute_admin') && !hasRole('super_admin');
+
+    if (isStudentRole) {
+      // Fetch student stats
+      const { count: completedCount } = await supabase
+        .from('exam_sessions')
+        .select('*', { count: 'exact', head: true })
+        .eq('student_id', user.id)
+        .eq('status', 'submitted');
+
+      const { data: results } = await supabase
+        .from('results')
+        .select('percentage')
+        .eq('student_id', user.id);
+
+      const avgScore = results && results.length > 0
+        ? results.reduce((sum, r) => sum + (r.percentage || 0), 0) / results.length
+        : null;
+
+      // Count available published exams
+      const { count: availableCount } = await supabase
+        .from('exams')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'published');
+
+      setStats({
+        totalExams: availableCount || 0,
+        completedExams: completedCount || 0,
+        totalAttempts: completedCount || 0,
+        avgScore,
+      });
+    } else {
+      // Fetch teacher/admin stats - use fallback for null institute_id
+      let query = supabase.from('exams').select('*', { count: 'exact', head: true });
+      
+      if (profile?.institute_id) {
+        query = query.eq('institute_id', profile.institute_id);
+      } else {
+        query = query.eq('created_by', user.id);
+      }
+
+      const { count: examCount } = await query;
+
+      // Get total attempts on user's exams
+      let examIdsQuery = supabase.from('exams').select('id');
+      if (profile?.institute_id) {
+        examIdsQuery = examIdsQuery.eq('institute_id', profile.institute_id);
+      } else {
+        examIdsQuery = examIdsQuery.eq('created_by', user.id);
+      }
+      
+      const { data: examIds } = await examIdsQuery;
+      
+      let totalAttempts = 0;
+      if (examIds && examIds.length > 0) {
+        const { count } = await supabase
+          .from('exam_sessions')
+          .select('*', { count: 'exact', head: true })
+          .in('exam_id', examIds.map(e => e.id));
+        totalAttempts = count || 0;
+      }
+
+      setStats({
+        totalExams: examCount || 0,
+        completedExams: 0,
+        totalAttempts,
+        avgScore: null,
+      });
+    }
+  };
 
   if (isLoading) {
     return (
@@ -129,7 +223,7 @@ const Dashboard = () => {
                   <FileText className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">0</div>
+                  <div className="text-2xl font-bold">{stats.totalExams}</div>
                   <p className="text-xs text-muted-foreground mt-1">Ready to attempt</p>
                 </CardContent>
               </Card>
@@ -139,7 +233,7 @@ const Dashboard = () => {
                   <BarChart3 className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">0</div>
+                  <div className="text-2xl font-bold">{stats.completedExams}</div>
                   <p className="text-xs text-muted-foreground mt-1">Total attempts</p>
                 </CardContent>
               </Card>
@@ -149,7 +243,7 @@ const Dashboard = () => {
                   <BarChart3 className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">--</div>
+                  <div className="text-2xl font-bold">{stats.avgScore !== null ? `${stats.avgScore.toFixed(1)}%` : '--'}</div>
                   <p className="text-xs text-muted-foreground mt-1">Across all exams</p>
                 </CardContent>
               </Card>
@@ -172,7 +266,7 @@ const Dashboard = () => {
                   <FileText className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">0</div>
+                  <div className="text-2xl font-bold">{stats.totalExams}</div>
                   <p className="text-xs text-muted-foreground mt-1">Created exams</p>
                 </CardContent>
               </Card>
@@ -192,7 +286,7 @@ const Dashboard = () => {
                   <BarChart3 className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">0</div>
+                  <div className="text-2xl font-bold">{stats.totalAttempts}</div>
                   <p className="text-xs text-muted-foreground mt-1">Total attempts</p>
                 </CardContent>
               </Card>
