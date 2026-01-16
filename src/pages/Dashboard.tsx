@@ -363,7 +363,7 @@ const Dashboard = () => {
           )}
 
           {isAdmin && (
-            <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/institute')}>
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/institute/users')}>
               <CardHeader>
                 <div className="w-12 h-12 rounded-xl bg-warning/10 flex items-center justify-center mb-2 group-hover:bg-warning/20 transition-colors">
                   <Building2 className="h-6 w-6 text-warning" />
@@ -376,6 +376,26 @@ const Dashboard = () => {
               <CardContent>
                 <Button variant="ghost" className="p-0 h-auto text-warning">
                   Manage <ChevronRight className="ml-1 h-4 w-4" />
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Create Institute for users without one */}
+          {!profile?.institute_id && (isTeacher || isStudent) && (
+            <Card className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => navigate('/institute/create')}>
+              <CardHeader>
+                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-2 group-hover:bg-primary/20 transition-colors">
+                  <Building2 className="h-6 w-6 text-primary" />
+                </div>
+                <CardTitle>Create Institute</CardTitle>
+                <CardDescription>
+                  Set up your own coaching institute or school and become an admin.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="ghost" className="p-0 h-auto text-primary">
+                  Get Started <ChevronRight className="ml-1 h-4 w-4" />
                 </Button>
               </CardContent>
             </Card>
