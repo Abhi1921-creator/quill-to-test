@@ -13,6 +13,9 @@ import AvailableExams from "./pages/AvailableExams";
 import AnswerKeyUpload from "./pages/AnswerKeyUpload";
 import ExamResults from "./pages/ExamResults";
 import ManageAnswerKeys from "./pages/ManageAnswerKeys";
+import CreateInstitute from "./pages/CreateInstitute";
+import JoinInstitute from "./pages/JoinInstitute";
+import InstituteUsers from "./pages/InstituteUsers";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -34,6 +37,9 @@ const App = () => (
             <Route path="/exams/answer-keys" element={<ManageAnswerKeys />} />
             <Route path="/exams" element={<AvailableExams />} />
             <Route path="/results/:sessionId" element={<ExamResults />} />
+            <Route path="/institute/create" element={<CreateInstitute />} />
+            <Route path="/institute/users" element={<InstituteUsers />} />
+            <Route path="/join-institute" element={<JoinInstitute />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
