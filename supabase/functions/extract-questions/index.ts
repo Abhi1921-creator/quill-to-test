@@ -5,6 +5,208 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Split content into chunks based on approximate question count
+function splitContentIntoChunks(content: string, maxChunkSize: number = 30000): string[] {
+  const chunks: string[] = [];
+  
+  // If content is small enough, return as single chunk
+  if (content.length <= maxChunkSize) {
+    return [content];
+  }
+  
+  // Split by common question patterns to avoid breaking mid-question
+  const questionPatterns = /(?=(?:^|\n)\s*(?:Q\s*\.?\s*\d+|Question\s+\d+|\d+\s*[.):]\s*[A-Z]))/gi;
+  const parts = content.split(questionPatterns).filter(p => p.trim());
+  
+  let currentChunk = "";
+  for (const part of parts) {
+    if ((currentChunk + part).length > maxChunkSize && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = part;
+    } else {
+      currentChunk += part;
+    }
+  }
+  
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk);
+  }
+  
+  // If splitting by questions didn't work, fall back to simple splitting
+  if (chunks.length === 0) {
+    for (let i = 0; i < content.length; i += maxChunkSize) {
+      chunks.push(content.substring(i, i + maxChunkSize));
+    }
+  }
+  
+  return chunks;
+}
+
+// Parse JSON from AI response with robust error handling
+function parseAIResponse(content: string): any {
+  let jsonStr = content;
+  
+  // Remove markdown code block wrapper if present
+  const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch) {
+    jsonStr = codeBlockMatch[1];
+  }
+  
+  // Find the JSON object
+  const jsonStartIndex = jsonStr.indexOf('{');
+  if (jsonStartIndex !== -1) {
+    jsonStr = jsonStr.substring(jsonStartIndex);
+  }
+  
+  // Try to find the complete JSON by matching braces
+  let braceCount = 0;
+  let jsonEndIndex = -1;
+  for (let i = 0; i < jsonStr.length; i++) {
+    if (jsonStr[i] === '{') braceCount++;
+    if (jsonStr[i] === '}') braceCount--;
+    if (braceCount === 0 && jsonStr[i] === '}') {
+      jsonEndIndex = i + 1;
+      break;
+    }
+  }
+  
+  if (jsonEndIndex > 0) {
+    jsonStr = jsonStr.substring(0, jsonEndIndex);
+  }
+  
+  return JSON.parse(jsonStr);
+}
+
+// Extract questions from a single chunk
+async function extractFromChunk(
+  chunk: string, 
+  chunkIndex: number, 
+  totalChunks: number,
+  examType: string,
+  apiKey: string
+): Promise<any> {
+  const systemPrompt = `You are an expert exam paper analyzer. Extract questions from this exam paper chunk.
+
+CRITICAL: You MUST complete the entire JSON response. Do not stop mid-response.
+
+Extract:
+1. All questions with exact text
+2. All options (A/B/C/D or 1/2/3/4 format)
+3. Section info if present
+4. Question type (single_correct, multiple_correct, true_false, numeric)
+5. Marks info if available
+
+Rules:
+- Detect question patterns: "Q1.", "1.", "Question 1:", etc.
+- Detect option patterns: "A)", "(A)", "a.", "1)", etc.
+- For True/False: options = ["True", "False"]
+- For numeric: options = []
+- Keep responses concise but complete
+
+Return ONLY this JSON (no extra text):
+{
+  "sections": [
+    {
+      "name": "Section name or null",
+      "questions": [
+        {
+          "question_text": "Question text",
+          "question_type": "single_correct",
+          "options": ["A", "B", "C", "D"],
+          "marks": 1,
+          "negative_marks": 0.25
+        }
+      ]
+    }
+  ]
+}`;
+
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { 
+          role: "user", 
+          content: `This is chunk ${chunkIndex + 1} of ${totalChunks}. Exam type: ${examType}.\n\nExtract all questions from this content:\n\n${chunk}` 
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 16000,
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error("RATE_LIMIT");
+    }
+    if (response.status === 402) {
+      throw new Error("CREDITS_EXHAUSTED");
+    }
+    throw new Error(`AI error: ${response.status}`);
+  }
+
+  const aiResponse = await response.json();
+  const content = aiResponse.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error("No AI response");
+  }
+
+  return parseAIResponse(content);
+}
+
+// Merge multiple chunk results into one
+function mergeResults(results: any[], examType: string): any {
+  const mergedSections: Map<string, any[]> = new Map();
+  let totalQuestions = 0;
+  const detectedSections: Set<string> = new Set();
+  let hasNegativeMarking = false;
+
+  for (const result of results) {
+    if (!result?.sections) continue;
+
+    for (const section of result.sections) {
+      const sectionName = section.name || "General";
+      detectedSections.add(sectionName);
+
+      if (!mergedSections.has(sectionName)) {
+        mergedSections.set(sectionName, []);
+      }
+
+      if (section.questions) {
+        for (const q of section.questions) {
+          mergedSections.get(sectionName)!.push(q);
+          totalQuestions++;
+          if (q.negative_marks && q.negative_marks > 0) {
+            hasNegativeMarking = true;
+          }
+        }
+      }
+    }
+  }
+
+  const sections = Array.from(mergedSections.entries()).map(([name, questions]) => ({
+    name: name === "General" ? null : name,
+    questions,
+  }));
+
+  return {
+    sections,
+    metadata: {
+      total_questions: totalQuestions,
+      exam_type: examType || "custom",
+      has_negative_marking: hasNegativeMarking,
+      detected_sections: Array.from(detectedSections).filter(s => s !== "General"),
+    },
+  };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -29,8 +231,8 @@ serve(async (req) => {
       );
     }
 
-    // Validate size (500KB max)
-    const maxSize = 500_000;
+    // Increased size limit for chunked processing (1MB max)
+    const maxSize = 1_000_000;
     if (pdfContent.length > maxSize) {
       return new Response(
         JSON.stringify({ error: `PDF content too large. Maximum ${maxSize / 1000}KB allowed.` }),
@@ -55,7 +257,7 @@ serve(async (req) => {
       );
     }
 
-    // Sanitize content - remove potential prompt injection patterns
+    // Sanitize content
     const sanitizedContent = pdfContent
       .replace(/ignore previous instructions/gi, '')
       .replace(/system:/gi, '')
@@ -67,137 +269,64 @@ serve(async (req) => {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    const systemPrompt = `You are an expert exam paper analyzer. Your task is to extract questions from exam papers with high accuracy.
+    // Split content into manageable chunks
+    const chunks = splitContentIntoChunks(sanitizedContent, 25000);
+    console.log(`Processing ${chunks.length} chunk(s) for extraction`);
 
-You will analyze the provided exam PDF content and extract:
-1. All questions with their exact text
-2. All options (A, B, C, D or 1, 2, 3, 4 format)
-3. Section information if present (like Quantitative Aptitude, Reasoning, English, etc.)
-4. Question type (single_correct, multiple_correct, true_false, numeric)
-5. Any marks/negative marks information
-
-Important rules:
-- Detect question patterns like "Q1.", "1.", "Question 1:", etc.
-- Detect option patterns like "A)", "(A)", "a.", "1)", etc.
-- Identify sections from headings like "Section A", "QUANTITATIVE APTITUDE", etc.
-- For True/False questions, options should be ["True", "False"]
-- For numeric questions, options array should be empty
-- Preserve mathematical equations and special characters
-
-Return the response in this exact JSON format:
-{
-  "sections": [
-    {
-      "name": "Section name or null if no sections",
-      "questions": [
-        {
-          "question_text": "The complete question text",
-          "question_type": "single_correct|multiple_correct|true_false|numeric",
-          "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
-          "marks": 1,
-          "negative_marks": 0.25
-        }
-      ]
-    }
-  ],
-  "metadata": {
-    "total_questions": 100,
-    "exam_type": "${examType || 'custom'}",
-    "has_negative_marking": true,
-    "detected_sections": ["Section A", "Section B"]
-  }
-}`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { 
-            role: "user", 
-            content: `Please analyze this exam paper content and extract all questions, options, and sections:\n\n${sanitizedContent}` 
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 32000,
-      }),
-    });
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    const results: any[] = [];
+    
+    // Process chunks sequentially to avoid rate limits
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
+      
+      try {
+        const chunkResult = await extractFromChunk(
+          chunks[i],
+          i,
+          chunks.length,
+          examType || 'custom',
+          LOVABLE_API_KEY
         );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      throw new Error(`AI gateway error: ${response.status}`);
-    }
-
-    const aiResponse = await response.json();
-    const content = aiResponse.choices?.[0]?.message?.content;
-
-    if (!content) {
-      throw new Error("No response from AI");
-    }
-
-    // Parse the JSON from the AI response
-    let extractedData;
-    try {
-      // Try to find JSON in the response (might be wrapped in markdown code blocks)
-      let jsonStr = content;
-      
-      // Remove markdown code block wrapper if present
-      const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (codeBlockMatch) {
-        jsonStr = codeBlockMatch[1];
-      }
-      
-      // Find the JSON object
-      const jsonStartIndex = jsonStr.indexOf('{');
-      if (jsonStartIndex !== -1) {
-        jsonStr = jsonStr.substring(jsonStartIndex);
-      }
-      
-      // Try to find the complete JSON by matching braces
-      let braceCount = 0;
-      let jsonEndIndex = -1;
-      for (let i = 0; i < jsonStr.length; i++) {
-        if (jsonStr[i] === '{') braceCount++;
-        if (jsonStr[i] === '}') braceCount--;
-        if (braceCount === 0 && jsonStr[i] === '}') {
-          jsonEndIndex = i + 1;
-          break;
+        results.push(chunkResult);
+        console.log(`Chunk ${i + 1} extracted: ${chunkResult?.sections?.[0]?.questions?.length || 0} questions`);
+      } catch (chunkError) {
+        console.error(`Error processing chunk ${i + 1}:`, chunkError);
+        
+        if (chunkError instanceof Error) {
+          if (chunkError.message === "RATE_LIMIT") {
+            return new Response(
+              JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
+              { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          if (chunkError.message === "CREDITS_EXHAUSTED") {
+            return new Response(
+              JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
+              { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
         }
+        
+        // Continue with other chunks if one fails
+        console.log(`Continuing despite chunk ${i + 1} failure`);
       }
       
-      if (jsonEndIndex > 0) {
-        jsonStr = jsonStr.substring(0, jsonEndIndex);
+      // Small delay between chunks to avoid rate limits
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
-      
-      extractedData = JSON.parse(jsonStr);
-    } catch (parseError) {
-      console.error("Failed to parse AI response. Content length:", content.length);
-      console.error("Parse error:", parseError);
-      console.error("First 500 chars:", content.substring(0, 500));
-      console.error("Last 500 chars:", content.substring(content.length - 500));
-      throw new Error("Failed to parse extracted questions. The response may have been truncated. Try with a smaller PDF or fewer pages.");
     }
+
+    if (results.length === 0) {
+      throw new Error("Failed to extract any questions. Please try with a smaller PDF.");
+    }
+
+    // Merge all chunk results
+    const mergedData = mergeResults(results, examType || 'custom');
+    console.log(`Total extracted: ${mergedData.metadata.total_questions} questions`);
 
     return new Response(
-      JSON.stringify({ success: true, data: extractedData }),
+      JSON.stringify({ success: true, data: mergedData }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
