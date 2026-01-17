@@ -5,8 +5,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Split content into chunks based on approximate question count
-function splitContentIntoChunks(content: string, maxChunkSize: number = 30000): string[] {
+// Split content into chunks - more aggressive splitting for large content
+function splitContentIntoChunks(content: string, maxChunkSize: number = 15000): string[] {
   const chunks: string[] = [];
   
   // If content is small enough, return as single chunk
@@ -14,28 +14,50 @@ function splitContentIntoChunks(content: string, maxChunkSize: number = 30000): 
     return [content];
   }
   
-  // Split by common question patterns to avoid breaking mid-question
-  const questionPatterns = /(?=(?:^|\n)\s*(?:Q\s*\.?\s*\d+|Question\s+\d+|\d+\s*[.):]\s*[A-Z]))/gi;
-  const parts = content.split(questionPatterns).filter(p => p.trim());
+  // First, try to split by sections or major headings
+  const sectionPatterns = /(?=\n\s*(?:SECTION|Section|PART|Part|PHYSICS|CHEMISTRY|BIOLOGY|MATHEMATICS|QUANTITATIVE|REASONING|ENGLISH|GENERAL)\s*[A-Z\-:]*)/gi;
+  let parts = content.split(sectionPatterns).filter(p => p.trim().length > 100);
   
-  let currentChunk = "";
-  for (const part of parts) {
-    if ((currentChunk + part).length > maxChunkSize && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = part;
-    } else {
-      currentChunk += part;
+  // If no sections found, split by question patterns
+  if (parts.length <= 1) {
+    // Match common question number patterns - more flexible
+    const lines = content.split('\n');
+    let currentChunk = "";
+    
+    for (const line of lines) {
+      // Check if this line starts a new question
+      const isQuestionStart = /^\s*(?:Q\.?\s*\d+|Question\s*\d+|\d+\s*[.)]\s*[A-Z])/i.test(line);
+      
+      if (isQuestionStart && currentChunk.length > maxChunkSize * 0.5) {
+        // We have enough content and found a question boundary
+        chunks.push(currentChunk);
+        currentChunk = line + "\n";
+      } else {
+        currentChunk += line + "\n";
+        
+        // Force split if chunk gets too large
+        if (currentChunk.length > maxChunkSize) {
+          chunks.push(currentChunk);
+          currentChunk = "";
+        }
+      }
     }
+    
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk);
+    }
+    
+    return chunks.length > 0 ? chunks : [content];
   }
   
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk);
-  }
-  
-  // If splitting by questions didn't work, fall back to simple splitting
-  if (chunks.length === 0) {
-    for (let i = 0; i < content.length; i += maxChunkSize) {
-      chunks.push(content.substring(i, i + maxChunkSize));
+  // Process section-based parts
+  for (const part of parts) {
+    if (part.length <= maxChunkSize) {
+      chunks.push(part);
+    } else {
+      // Recursively split large sections
+      const subChunks = splitContentIntoChunks(part, maxChunkSize);
+      chunks.push(...subChunks);
     }
   }
   
@@ -52,21 +74,44 @@ function parseAIResponse(content: string): any {
     jsonStr = codeBlockMatch[1];
   }
   
-  // Find the JSON object
+  // Find the JSON object start
   const jsonStartIndex = jsonStr.indexOf('{');
-  if (jsonStartIndex !== -1) {
-    jsonStr = jsonStr.substring(jsonStartIndex);
+  if (jsonStartIndex === -1) {
+    throw new Error("No JSON object found in response");
   }
+  jsonStr = jsonStr.substring(jsonStartIndex);
   
   // Try to find the complete JSON by matching braces
   let braceCount = 0;
   let jsonEndIndex = -1;
+  let inString = false;
+  let escapeNext = false;
+  
   for (let i = 0; i < jsonStr.length; i++) {
-    if (jsonStr[i] === '{') braceCount++;
-    if (jsonStr[i] === '}') braceCount--;
-    if (braceCount === 0 && jsonStr[i] === '}') {
-      jsonEndIndex = i + 1;
-      break;
+    const char = jsonStr[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !escapeNext) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') braceCount++;
+      if (char === '}') braceCount--;
+      if (braceCount === 0) {
+        jsonEndIndex = i + 1;
+        break;
+      }
     }
   }
   
@@ -74,7 +119,72 @@ function parseAIResponse(content: string): any {
     jsonStr = jsonStr.substring(0, jsonEndIndex);
   }
   
-  return JSON.parse(jsonStr);
+  try {
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    // Try to repair truncated JSON
+    console.log("Attempting to repair truncated JSON...");
+    const repaired = repairTruncatedJSON(jsonStr);
+    return JSON.parse(repaired);
+  }
+}
+
+// Attempt to repair truncated JSON
+function repairTruncatedJSON(jsonStr: string): string {
+  let repaired = jsonStr;
+  
+  // Count open braces and brackets
+  let braces = 0;
+  let brackets = 0;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < repaired.length; i++) {
+    const char = repaired[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === '{') braces++;
+      if (char === '}') braces--;
+      if (char === '[') brackets++;
+      if (char === ']') brackets--;
+    }
+  }
+  
+  // If we're in a string, close it
+  if (inString) {
+    repaired += '"';
+  }
+  
+  // Remove trailing comma if present
+  repaired = repaired.replace(/,\s*$/, '');
+  
+  // Close any open brackets and braces
+  while (brackets > 0) {
+    repaired += ']';
+    brackets--;
+  }
+  
+  while (braces > 0) {
+    repaired += '}';
+    braces--;
+  }
+  
+  return repaired;
 }
 
 // Extract questions from a single chunk
@@ -85,36 +195,26 @@ async function extractFromChunk(
   examType: string,
   apiKey: string
 ): Promise<any> {
-  const systemPrompt = `You are an expert exam paper analyzer. Extract questions from this exam paper chunk.
+  const systemPrompt = `You are an exam paper analyzer. Extract ALL questions from this content.
 
-CRITICAL: You MUST complete the entire JSON response. Do not stop mid-response.
+CRITICAL RULES:
+1. You MUST complete the ENTIRE JSON response
+2. Keep question_text SHORT - just the question, not options
+3. Put options in the options array
+4. Use null for section name if not specified
 
-Extract:
-1. All questions with exact text
-2. All options (A/B/C/D or 1/2/3/4 format)
-3. Section info if present
-4. Question type (single_correct, multiple_correct, true_false, numeric)
-5. Marks info if available
-
-Rules:
-- Detect question patterns: "Q1.", "1.", "Question 1:", etc.
-- Detect option patterns: "A)", "(A)", "a.", "1)", etc.
-- For True/False: options = ["True", "False"]
-- For numeric: options = []
-- Keep responses concise but complete
-
-Return ONLY this JSON (no extra text):
+Output format:
 {
   "sections": [
     {
-      "name": "Section name or null",
+      "name": null,
       "questions": [
         {
-          "question_text": "Question text",
+          "question_text": "Question without options",
           "question_type": "single_correct",
           "options": ["A", "B", "C", "D"],
           "marks": 1,
-          "negative_marks": 0.25
+          "negative_marks": 0
         }
       ]
     }
@@ -133,11 +233,11 @@ Return ONLY this JSON (no extra text):
         { role: "system", content: systemPrompt },
         { 
           role: "user", 
-          content: `This is chunk ${chunkIndex + 1} of ${totalChunks}. Exam type: ${examType}.\n\nExtract all questions from this content:\n\n${chunk}` 
+          content: `Extract questions from chunk ${chunkIndex + 1}/${totalChunks} (${examType}):\n\n${chunk}` 
         },
       ],
       temperature: 0.1,
-      max_tokens: 16000,
+      max_tokens: 8000,
     }),
   });
 
@@ -148,6 +248,8 @@ Return ONLY this JSON (no extra text):
     if (response.status === 402) {
       throw new Error("CREDITS_EXHAUSTED");
     }
+    const errText = await response.text();
+    console.error(`AI error ${response.status}:`, errText);
     throw new Error(`AI error: ${response.status}`);
   }
 
@@ -158,6 +260,7 @@ Return ONLY this JSON (no extra text):
     throw new Error("No AI response");
   }
 
+  console.log(`Chunk ${chunkIndex + 1} response length: ${content.length}`);
   return parseAIResponse(content);
 }
 
@@ -223,7 +326,6 @@ serve(async (req) => {
       );
     }
 
-    // Validate type
     if (typeof pdfContent !== 'string') {
       return new Response(
         JSON.stringify({ error: "PDF content must be a string" }),
@@ -231,7 +333,6 @@ serve(async (req) => {
       );
     }
 
-    // Increased size limit for chunked processing (1MB max)
     const maxSize = 1_000_000;
     if (pdfContent.length > maxSize) {
       return new Response(
@@ -240,7 +341,6 @@ serve(async (req) => {
       );
     }
 
-    // Validate not empty
     if (pdfContent.trim().length === 0) {
       return new Response(
         JSON.stringify({ error: "PDF content is empty" }),
@@ -248,7 +348,6 @@ serve(async (req) => {
       );
     }
 
-    // Validate examType enum if provided
     const validExamTypes = ['ssc', 'banking', 'engineering', 'medical', 'upsc', 'custom'];
     if (examType && !validExamTypes.includes(examType)) {
       return new Response(
@@ -269,13 +368,14 @@ serve(async (req) => {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    // Split content into manageable chunks
-    const chunks = splitContentIntoChunks(sanitizedContent, 25000);
-    console.log(`Processing ${chunks.length} chunk(s) for extraction`);
+    // Split content into smaller chunks (15KB each for safety)
+    const chunks = splitContentIntoChunks(sanitizedContent, 15000);
+    console.log(`Processing ${chunks.length} chunk(s), sizes: ${chunks.map(c => c.length).join(', ')}`);
 
     const results: any[] = [];
+    const errors: string[] = [];
     
-    // Process chunks sequentially to avoid rate limits
+    // Process chunks sequentially
     for (let i = 0; i < chunks.length; i++) {
       console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
       
@@ -287,43 +387,49 @@ serve(async (req) => {
           examType || 'custom',
           LOVABLE_API_KEY
         );
-        results.push(chunkResult);
-        console.log(`Chunk ${i + 1} extracted: ${chunkResult?.sections?.[0]?.questions?.length || 0} questions`);
-      } catch (chunkError) {
-        console.error(`Error processing chunk ${i + 1}:`, chunkError);
         
-        if (chunkError instanceof Error) {
-          if (chunkError.message === "RATE_LIMIT") {
-            return new Response(
-              JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-              { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
-          if (chunkError.message === "CREDITS_EXHAUSTED") {
-            return new Response(
-              JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
-              { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
-          }
+        const questionCount = chunkResult?.sections?.reduce(
+          (sum: number, s: any) => sum + (s.questions?.length || 0), 0
+        ) || 0;
+        
+        console.log(`Chunk ${i + 1} extracted: ${questionCount} questions`);
+        
+        if (questionCount > 0) {
+          results.push(chunkResult);
         }
+      } catch (chunkError) {
+        const errorMsg = chunkError instanceof Error ? chunkError.message : String(chunkError);
+        console.error(`Error processing chunk ${i + 1}:`, errorMsg);
+        errors.push(`Chunk ${i + 1}: ${errorMsg}`);
         
-        // Continue with other chunks if one fails
-        console.log(`Continuing despite chunk ${i + 1} failure`);
+        if (errorMsg === "RATE_LIMIT") {
+          return new Response(
+            JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
+            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        if (errorMsg === "CREDITS_EXHAUSTED") {
+          return new Response(
+            JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
+            { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
       }
       
-      // Small delay between chunks to avoid rate limits
+      // Delay between chunks to avoid rate limits
       if (i < chunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
     if (results.length === 0) {
-      throw new Error("Failed to extract any questions. Please try with a smaller PDF.");
+      console.error("All chunks failed:", errors);
+      throw new Error("Failed to extract questions. The PDF may have an unusual format. Try a different file.");
     }
 
     // Merge all chunk results
     const mergedData = mergeResults(results, examType || 'custom');
-    console.log(`Total extracted: ${mergedData.metadata.total_questions} questions`);
+    console.log(`Total extracted: ${mergedData.metadata.total_questions} questions from ${results.length}/${chunks.length} chunks`);
 
     return new Response(
       JSON.stringify({ success: true, data: mergedData }),
