@@ -18,7 +18,8 @@ import {
   Trash2, 
   Check, 
   X,
-  GripVertical 
+  GripVertical,
+  ImageIcon 
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +31,9 @@ export interface ExtractedQuestion {
   marks: number;
   negative_marks: number;
   section?: string;
+  has_diagram?: boolean;
+  diagram_description?: string;
+  page_number?: number;
 }
 
 export interface ExtractedSection {
@@ -117,6 +121,12 @@ const QuestionCard = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {question.has_diagram && (
+              <Badge variant="outline" className="gap-1 text-blue-600 border-blue-200 bg-blue-50">
+                <ImageIcon className="h-3 w-3" />
+                Diagram
+              </Badge>
+            )}
             <Badge variant={getQuestionTypeBadgeVariant(question.question_type) as any}>
               {getQuestionTypeLabel(question.question_type)}
             </Badge>
@@ -150,6 +160,20 @@ const QuestionCard = ({
       {(isExpanded || isEditing) && (
         <CardContent className="pt-0 pb-4 px-4">
           <div className="ml-10 space-y-4">
+            {/* Diagram Description */}
+            {question.has_diagram && question.diagram_description && (
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                <div className="flex items-center gap-2 text-blue-700">
+                  <ImageIcon className="h-4 w-4" />
+                  <span className="text-sm font-medium">Diagram</span>
+                  {question.page_number && (
+                    <span className="text-xs text-blue-500">(Page {question.page_number})</span>
+                  )}
+                </div>
+                <p className="text-sm text-blue-600 mt-1">{question.diagram_description}</p>
+              </div>
+            )}
+            
             {/* Options */}
             {question.options.length > 0 && (
               <div className="space-y-2">

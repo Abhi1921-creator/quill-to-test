@@ -39,6 +39,7 @@ const CreateExam = () => {
   const [examType, setExamType] = useState<ExamType | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfText, setPdfText] = useState<string>('');
+  const [pdfImageUrls, setPdfImageUrls] = useState<string[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractedSections, setExtractedSections] = useState<ExtractedSection[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -72,7 +73,11 @@ const CreateExam = () => {
     
     try {
       const { data, error } = await supabase.functions.invoke('extract-questions', {
-        body: { pdfContent: pdfText, examType },
+        body: { 
+          pdfContent: pdfText, 
+          imageUrls: pdfImageUrls,
+          examType 
+        },
       });
 
       if (error) throw error;
@@ -91,6 +96,9 @@ const CreateExam = () => {
           options: q.options || [],
           marks: q.marks || 1,
           negative_marks: q.negative_marks || 0.25,
+          has_diagram: q.has_diagram || false,
+          diagram_description: q.diagram_description || null,
+          page_number: q.page_number || null,
         })),
       }));
 
@@ -215,7 +223,7 @@ const CreateExam = () => {
       case 'type':
         return examType !== null;
       case 'upload':
-        return pdfFile !== null && pdfText.length > 0;
+        return pdfFile !== null && (pdfText.length > 0 || pdfImageUrls.length > 0);
       case 'review':
         return extractedSections.length > 0 && extractedSections.some(s => s.questions.length > 0);
       case 'configure':
@@ -330,6 +338,7 @@ const CreateExam = () => {
               <PDFUploader
                 onFileSelect={setPdfFile}
                 onTextExtracted={setPdfText}
+                onImagesExtracted={setPdfImageUrls}
                 isExtracting={isExtracting}
               />
 
