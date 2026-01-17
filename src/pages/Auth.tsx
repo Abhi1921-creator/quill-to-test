@@ -6,10 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { GraduationCap, Mail, Lock, User, Loader2, ArrowLeft } from 'lucide-react';
+import { GraduationCap, Mail, Lock, User, Loader2, ArrowLeft, BookOpen, School } from 'lucide-react';
 import { z } from 'zod';
+import { cn } from '@/lib/utils';
 
-type SignUpRole = 'student';
+type SignUpRole = 'student' | 'teacher';
 
 const emailSchema = z.string().email('Please enter a valid email address');
 const passwordSchema = z.string().min(6, 'Password must be at least 6 characters');
@@ -31,8 +32,7 @@ const Auth = () => {
   const [signUpEmail, setSignUpEmail] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
   const [signUpConfirmPassword, setSignUpConfirmPassword] = useState('');
-  // Role is now always 'student' - teachers must be assigned by admins
-  const signUpRole: SignUpRole = 'student';
+  const [signUpRole, setSignUpRole] = useState<SignUpRole>('student');
 
   useEffect(() => {
     if (user) {
@@ -233,6 +233,54 @@ const Auth = () => {
                 {/* Sign Up Tab */}
                 <TabsContent value="signup" className="mt-0">
                   <form onSubmit={handleSignUp} className="space-y-4">
+                    {/* Role Selection Panels */}
+                    <div className="space-y-2">
+                      <Label>I am a</Label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSignUpRole('student')}
+                          className={cn(
+                            "flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-all",
+                            signUpRole === 'student'
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:border-muted-foreground/50"
+                          )}
+                        >
+                          <BookOpen className={cn(
+                            "h-8 w-8 mb-2",
+                            signUpRole === 'student' ? "text-primary" : "text-muted-foreground"
+                          )} />
+                          <span className={cn(
+                            "font-medium",
+                            signUpRole === 'student' ? "text-primary" : "text-foreground"
+                          )}>Student</span>
+                          <span className="text-xs text-muted-foreground mt-1">Join an institute</span>
+                        </button>
+                        
+                        <button
+                          type="button"
+                          onClick={() => setSignUpRole('teacher')}
+                          className={cn(
+                            "flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-all",
+                            signUpRole === 'teacher'
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:border-muted-foreground/50"
+                          )}
+                        >
+                          <School className={cn(
+                            "h-8 w-8 mb-2",
+                            signUpRole === 'teacher' ? "text-primary" : "text-muted-foreground"
+                          )} />
+                          <span className={cn(
+                            "font-medium",
+                            signUpRole === 'teacher' ? "text-primary" : "text-foreground"
+                          )}>Teacher</span>
+                          <span className="text-xs text-muted-foreground mt-1">Create an institute</span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="space-y-2">
                       <Label htmlFor="signup-name">Full Name</Label>
                       <div className="relative">
@@ -250,7 +298,6 @@ const Auth = () => {
                         <p className="text-sm text-destructive">{errors.signUpName}</p>
                       )}
                     </div>
-
 
                     <div className="space-y-2">
                       <Label htmlFor="signup-email">Email</Label>
