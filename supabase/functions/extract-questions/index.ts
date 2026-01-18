@@ -14,14 +14,55 @@ interface ExtractedQuestion {
   has_diagram?: boolean;
   diagram_description?: string;
   page_number?: number;
+  page_image_url?: string;
 }
 
-interface ExtractedSection {
-  name: string | null;
-  questions: ExtractedQuestion[];
+function repairTruncatedJSON(jsonStr: string): string {
+  let repaired = jsonStr.trim();
+  
+  // Count open brackets
+  let openBraces = (repaired.match(/{/g) || []).length;
+  let closeBraces = (repaired.match(/}/g) || []).length;
+  let openBrackets = (repaired.match(/\[/g) || []).length;
+  let closeBrackets = (repaired.match(/\]/g) || []).length;
+  
+  // Remove trailing incomplete content
+  const patterns = [
+    /,\s*"[^"]*$/,  // Incomplete key
+    /,\s*$/,        // Trailing comma
+    /:\s*"[^"]*$/,  // Incomplete string value
+    /:\s*$/,        // Missing value
+  ];
+  
+  for (const pattern of patterns) {
+    repaired = repaired.replace(pattern, '');
+  }
+  
+  // Close any open strings
+  const quoteCount = (repaired.match(/"/g) || []).length;
+  if (quoteCount % 2 !== 0) {
+    repaired += '"';
+  }
+  
+  // Recount after cleanup
+  openBraces = (repaired.match(/{/g) || []).length;
+  closeBraces = (repaired.match(/}/g) || []).length;
+  openBrackets = (repaired.match(/\[/g) || []).length;
+  closeBrackets = (repaired.match(/\]/g) || []).length;
+  
+  // Close brackets and braces
+  while (closeBrackets < openBrackets) {
+    repaired += ']';
+    closeBrackets++;
+  }
+  while (closeBraces < openBraces) {
+    repaired += '}';
+    closeBraces++;
+  }
+  
+  return repaired;
 }
 
-// Parse JSON from AI response with robust error handling
 function parseAIResponse(content: string): any {
   let jsonStr = content;
   
@@ -81,65 +122,48 @@ function parseAIResponse(content: string): any {
   } catch (e) {
     console.log("Attempting to repair truncated JSON...");
     const repaired = repairTruncatedJSON(jsonStr);
-    return JSON.parse(repaired);
+    try {
+      return JSON.parse(repaired);
+    } catch (e2) {
+      console.error("JSON repair failed:", e2);
+      // Return empty structure rather than failing
+      return { sections: [] };
+    }
   }
 }
 
-// Attempt to repair truncated JSON
-function repairTruncatedJSON(jsonStr: string): string {
-  let repaired = jsonStr;
-  
-  let braces = 0;
-  let brackets = 0;
-  let inString = false;
-  let escapeNext = false;
-  
-  for (let i = 0; i < repaired.length; i++) {
-    const char = repaired[i];
-    
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-    
-    if (char === '\\') {
-      escapeNext = true;
-      continue;
-    }
-    
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    
-    if (!inString) {
-      if (char === '{') braces++;
-      if (char === '}') braces--;
-      if (char === '[') brackets++;
-      if (char === ']') brackets--;
-    }
-  }
-  
-  if (inString) {
-    repaired += '"';
-  }
-  
-  repaired = repaired.replace(/,\s*$/, '');
-  
-  while (brackets > 0) {
-    repaired += ']';
-    brackets--;
-  }
-  
-  while (braces > 0) {
-    repaired += '}';
-    braces--;
-  }
-  
-  return repaired;
+function cleanOptionText(option: string): string {
+  // Remove leading option markers like "A.", "A)", "1.", "1)", etc.
+  return option.replace(/^[\s]*(?:[A-Da-d1-4][\.\)\:][\s]*)?/, '').trim();
 }
 
-// Extract questions from page images using vision model
+function validateAndCleanQuestions(questions: any[]): ExtractedQuestion[] {
+  return questions
+    .filter(q => {
+      // Must have question text and it should be more than just an option
+      if (!q.question_text || typeof q.question_text !== 'string') return false;
+      const text = q.question_text.trim();
+      // Skip if it looks like just an option (single letter or number with text)
+      if (/^[A-Da-d1-4][\.\)\:]/.test(text) && text.length < 200) return false;
+      // Skip very short text that's likely not a question
+      if (text.length < 10) return false;
+      return true;
+    })
+    .map(q => ({
+      question_text: q.question_text.trim(),
+      question_type: q.question_type || 'single_correct',
+      options: Array.isArray(q.options) 
+        ? q.options.map((o: any) => typeof o === 'string' ? o.trim() : String(o))
+        : [],
+      marks: typeof q.marks === 'number' ? q.marks : 1,
+      negative_marks: typeof q.negative_marks === 'number' ? q.negative_marks : 0.25,
+      has_diagram: q.has_diagram === true,
+      diagram_description: q.diagram_description || null,
+      page_number: typeof q.page_number === 'number' ? q.page_number : null,
+      page_image_url: q.page_image_url || null,
+    }));
+}
+
 async function extractFromImages(
   imageUrls: string[],
   examType: string,
@@ -147,8 +171,8 @@ async function extractFromImages(
 ): Promise<any> {
   console.log(`Extracting from ${imageUrls.length} page images using vision...`);
   
-  const results: any[] = [];
-  const batchSize = 5; // Process 5 pages at a time
+  const allQuestions: ExtractedQuestion[] = [];
+  const batchSize = 3; // Smaller batch for better accuracy
   
   for (let i = 0; i < imageUrls.length; i += batchSize) {
     const batch = imageUrls.slice(i, i + batchSize);
@@ -162,36 +186,64 @@ async function extractFromImages(
       image_url: { url }
     }));
     
-    const systemPrompt = `You are an exam paper analyzer with vision capabilities. Extract ALL questions from these exam paper page images.
+    // Build page URL mapping for this batch
+    const pageImageMap = batch.map((url, idx) => `Page ${startPage + idx}: ${url}`).join('\n');
+    
+    const systemPrompt = `You are an expert exam paper analyzer. Your task is to extract QUESTIONS from exam paper images.
 
-CRITICAL RULES:
-1. Extract EVERY question you see, including those with diagrams, figures, charts, or images
-2. If a question has a diagram/figure, set has_diagram: true and provide a brief diagram_description
-3. Keep question_text as just the question itself
-4. Put all options in the options array
-5. Identify question types: single_correct, multiple_correct, true_false, or numeric
-6. Include the page_number for each question
+CRITICAL RULES - READ CAREFULLY:
 
-Output ONLY valid JSON in this format:
+1. A QUESTION is something that asks for an answer. It usually:
+   - Ends with a question mark (?)
+   - Starts with words like "What", "Which", "How", "Find", "Calculate", "If...then", "The value of"
+   - Has a question number (Q.1, 1., Q1, etc.)
+   - Is followed by OPTIONS (A, B, C, D or 1, 2, 3, 4)
+
+2. OPTIONS are the choices given for a question. They:
+   - Start with A), B), C), D) OR (A), (B), (C), (D) OR 1), 2), 3), 4) OR (1), (2), (3), (4)
+   - Are listed below/after the question
+   - ARE NOT QUESTIONS THEMSELVES - Never treat an option as a question!
+
+3. For EACH question you extract:
+   - "question_text": The full question text (WITHOUT the option labels)
+   - "options": Array of exactly 4 options (just the option text, you can keep or remove labels like "A)")
+   - "question_type": "single_correct" (most common), "multiple_correct", "true_false", or "numeric"
+   - "marks": Usually 1-4 marks per question
+   - "negative_marks": Usually 0.25-0.33 times the marks
+   - "has_diagram": true if the question has ANY image, figure, diagram, graph, chart, table, or visual
+   - "diagram_description": Brief description of what the diagram shows (if has_diagram is true)
+   - "page_number": Which page this question appears on (${startPage} to ${endPage})
+
+4. DIAGRAM DETECTION - Mark has_diagram: true for:
+   - Circuit diagrams, graphs, charts, tables
+   - Geometric figures, triangles, circles
+   - Maps, flowcharts, data tables
+   - Any image or visual element related to the question
+
+Page image URLs for reference:
+${pageImageMap}
+
+OUTPUT FORMAT - Return ONLY this JSON structure:
 {
-  "sections": [
+  "questions": [
     {
-      "name": null,
-      "questions": [
-        {
-          "question_text": "The question text here",
-          "question_type": "single_correct",
-          "options": ["A) option", "B) option", "C) option", "D) option"],
-          "marks": 1,
-          "negative_marks": 0.25,
-          "has_diagram": true,
-          "diagram_description": "A circuit diagram showing a resistor and capacitor in series",
-          "page_number": 1
-        }
-      ]
+      "question_text": "What is the capital of France?",
+      "question_type": "single_correct",
+      "options": ["A) London", "B) Paris", "C) Berlin", "D) Madrid"],
+      "marks": 1,
+      "negative_marks": 0.25,
+      "has_diagram": false,
+      "diagram_description": null,
+      "page_number": 1,
+      "page_image_url": "https://..."
     }
   ]
-}`;
+}
+
+IMPORTANT: 
+- Only output valid JSON, no other text
+- Every question MUST have exactly 4 options (unless it's numeric type which has 0 options)
+- Include the page_image_url for questions that have diagrams so the image can be displayed`;
 
     try {
       const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -209,99 +261,131 @@ Output ONLY valid JSON in this format:
               content: [
                 {
                   type: "text",
-                  text: `Extract all questions from these ${examType} exam pages (pages ${startPage}-${endPage}). Look carefully for any diagrams, figures, charts, or images and note them.`
+                  text: `These are pages ${startPage}-${endPage} from a ${examType || 'competitive'} exam paper. Extract ALL questions with their options. Remember: options are NOT questions. Look carefully for diagrams and images.`
                 },
                 ...imageContent
               ]
-            },
+            }
           ],
-          temperature: 0.1,
           max_tokens: 16000,
         }),
       });
 
       if (!response.ok) {
-        if (response.status === 429) {
-          console.log("Rate limited, waiting before retry...");
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          continue;
-        }
-        if (response.status === 402) {
-          throw new Error("CREDITS_EXHAUSTED");
-        }
-        const errText = await response.text();
-        console.error(`AI error ${response.status}:`, errText);
+        const errorText = await response.text();
+        console.error(`API error for pages ${startPage}-${endPage}:`, response.status, errorText);
         continue;
       }
 
-      const aiResponse = await response.json();
-      const content = aiResponse.choices?.[0]?.message?.content;
-
-      if (content) {
-        console.log(`Pages ${startPage}-${endPage} response length: ${content.length}`);
-        try {
-          const parsed = parseAIResponse(content);
-          if (parsed?.sections) {
-            results.push(parsed);
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      
+      if (!content) {
+        console.error(`No content for pages ${startPage}-${endPage}`);
+        continue;
+      }
+      
+      console.log(`Pages ${startPage}-${endPage} response length: ${content.length}`);
+      
+      const parsed = parseAIResponse(content);
+      
+      if (parsed.questions && Array.isArray(parsed.questions)) {
+        // Add page image URLs to questions that have diagrams
+        const questionsWithUrls = parsed.questions.map((q: any) => {
+          if (q.has_diagram && q.page_number) {
+            const pageIdx = q.page_number - 1;
+            if (pageIdx >= 0 && pageIdx < imageUrls.length) {
+              q.page_image_url = imageUrls[pageIdx];
+            }
           }
-        } catch (parseErr) {
-          console.error(`Failed to parse response for pages ${startPage}-${endPage}:`, parseErr);
-        }
+          return q;
+        });
+        
+        const validQuestions = validateAndCleanQuestions(questionsWithUrls);
+        allQuestions.push(...validQuestions);
+        console.log(`Extracted ${validQuestions.length} valid questions from pages ${startPage}-${endPage}`);
       }
-    } catch (err) {
-      console.error(`Error processing pages ${startPage}-${endPage}:`, err);
-      if (err instanceof Error && err.message === "CREDITS_EXHAUSTED") {
-        throw err;
+      
+      // Delay between batches to avoid rate limits
+      if (i + batchSize < imageUrls.length) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
-    }
-    
-    // Delay between batches
-    if (i + batchSize < imageUrls.length) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    } catch (error) {
+      console.error(`Failed to process pages ${startPage}-${endPage}:`, error);
     }
   }
   
-  return mergeResults(results, examType);
+  const hasDiagrams = allQuestions.some(q => q.has_diagram);
+  console.log(`Total extracted: ${allQuestions.length} questions, has_diagrams: ${hasDiagrams}`);
+  
+  return {
+    sections: [{ name: null, questions: allQuestions }],
+    metadata: {
+      total_questions: allQuestions.length,
+      has_diagrams: hasDiagrams,
+      extraction_method: 'vision'
+    }
+  };
 }
 
-// Extract questions from text (fallback for text-only PDFs)
 async function extractFromText(
   content: string,
   examType: string,
   apiKey: string
 ): Promise<any> {
-  console.log("Falling back to text-based extraction...");
+  console.log(`Extracting from text content (${content.length} chars)...`);
   
-  const chunks = splitContentIntoChunks(content, 15000);
-  console.log(`Processing ${chunks.length} text chunk(s)`);
+  // For very long content, chunk it
+  const maxChunkSize = 15000;
+  const chunks: string[] = [];
   
-  const results: any[] = [];
+  if (content.length > maxChunkSize) {
+    let start = 0;
+    while (start < content.length) {
+      let end = start + maxChunkSize;
+      // Try to break at a question boundary
+      if (end < content.length) {
+        const searchArea = content.substring(end - 500, end + 500);
+        const questionMatch = searchArea.search(/\n\s*(?:Q\.?\s*\d+|\d+[\.\)])/);
+        if (questionMatch > 0) {
+          end = end - 500 + questionMatch;
+        }
+      }
+      chunks.push(content.substring(start, end));
+      start = end;
+    }
+  } else {
+    chunks.push(content);
+  }
+  
+  const allQuestions: ExtractedQuestion[] = [];
   
   for (let i = 0; i < chunks.length; i++) {
-    console.log(`Processing text chunk ${i + 1}/${chunks.length}`);
+    console.log(`Processing chunk ${i + 1}/${chunks.length}...`);
     
-    const systemPrompt = `You are an exam paper analyzer. Extract ALL questions from this content.
+    const systemPrompt = `You are an expert exam paper analyzer. Extract ALL questions from the provided exam text.
 
 CRITICAL RULES:
-1. Complete the ENTIRE JSON response
-2. Keep question_text SHORT - just the question
-3. Put options in the options array
-4. Use null for section name if not specified
+1. A QUESTION asks for an answer and has OPTIONS below it
+2. OPTIONS (A, B, C, D) are NOT questions - they are choices for a question
+3. Never create a question from option text
 
-Output format:
+For each question, extract:
+- question_text: The full question
+- question_type: "single_correct", "multiple_correct", "true_false", or "numeric"
+- options: Array of 4 options (for MCQ) or empty array (for numeric)
+- marks: Points for correct answer (default 1)
+- negative_marks: Negative points (default 0.25)
+
+OUTPUT FORMAT:
 {
-  "sections": [
+  "questions": [
     {
-      "name": null,
-      "questions": [
-        {
-          "question_text": "Question text",
-          "question_type": "single_correct",
-          "options": ["A", "B", "C", "D"],
-          "marks": 1,
-          "negative_marks": 0.25
-        }
-      ]
+      "question_text": "Question text here",
+      "question_type": "single_correct",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "marks": 1,
+      "negative_marks": 0.25
     }
   ]
 }`;
@@ -317,132 +401,43 @@ Output format:
           model: "google/gemini-2.5-flash",
           messages: [
             { role: "system", content: systemPrompt },
-            { 
-              role: "user", 
-              content: `Extract questions from chunk ${i + 1}/${chunks.length} (${examType}):\n\n${chunks[i]}` 
-            },
+            { role: "user", content: `Extract questions from this ${examType || 'competitive'} exam text:\n\n${chunks[i]}` }
           ],
-          temperature: 0.1,
-          max_tokens: 8000,
+          max_tokens: 16000,
         }),
       });
 
       if (!response.ok) {
-        if (response.status === 429) {
-          console.log("Rate limited, waiting...");
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          continue;
-        }
+        console.error(`API error for chunk ${i + 1}:`, await response.text());
         continue;
       }
 
-      const aiResponse = await response.json();
-      const responseContent = aiResponse.choices?.[0]?.message?.content;
-
-      if (responseContent) {
-        try {
-          const parsed = parseAIResponse(responseContent);
-          if (parsed?.sections) {
-            results.push(parsed);
-          }
-        } catch (e) {
-          console.error(`Failed to parse chunk ${i + 1}:`, e);
-        }
-      }
-    } catch (err) {
-      console.error(`Error processing chunk ${i + 1}:`, err);
-    }
-    
-    if (i < chunks.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-  
-  return mergeResults(results, examType);
-}
-
-// Split content into chunks
-function splitContentIntoChunks(content: string, maxChunkSize: number = 15000): string[] {
-  const chunks: string[] = [];
-  
-  if (content.length <= maxChunkSize) {
-    return [content];
-  }
-  
-  const lines = content.split('\n');
-  let currentChunk = "";
-  
-  for (const line of lines) {
-    const isQuestionStart = /^\s*(?:Q\.?\s*\d+|Question\s*\d+|\d+\s*[.)]\s*[A-Z])/i.test(line);
-    
-    if (isQuestionStart && currentChunk.length > maxChunkSize * 0.5) {
-      chunks.push(currentChunk);
-      currentChunk = line + "\n";
-    } else {
-      currentChunk += line + "\n";
+      const data = await response.json();
+      const responseContent = data.choices?.[0]?.message?.content;
       
-      if (currentChunk.length > maxChunkSize) {
-        chunks.push(currentChunk);
-        currentChunk = "";
-      }
-    }
-  }
-  
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk);
-  }
-  
-  return chunks.length > 0 ? chunks : [content];
-}
-
-// Merge multiple chunk results
-function mergeResults(results: any[], examType: string): any {
-  const mergedSections: Map<string, ExtractedQuestion[]> = new Map();
-  let totalQuestions = 0;
-  const detectedSections: Set<string> = new Set();
-  let hasNegativeMarking = false;
-  let hasDiagrams = false;
-
-  for (const result of results) {
-    if (!result?.sections) continue;
-
-    for (const section of result.sections) {
-      const sectionName = section.name || "General";
-      detectedSections.add(sectionName);
-
-      if (!mergedSections.has(sectionName)) {
-        mergedSections.set(sectionName, []);
-      }
-
-      if (section.questions) {
-        for (const q of section.questions) {
-          mergedSections.get(sectionName)!.push(q);
-          totalQuestions++;
-          if (q.negative_marks && q.negative_marks > 0) {
-            hasNegativeMarking = true;
-          }
-          if (q.has_diagram) {
-            hasDiagrams = true;
-          }
+      if (responseContent) {
+        const parsed = parseAIResponse(responseContent);
+        if (parsed.questions && Array.isArray(parsed.questions)) {
+          const validQuestions = validateAndCleanQuestions(parsed.questions);
+          allQuestions.push(...validQuestions);
         }
       }
+      
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (error) {
+      console.error(`Failed to process chunk ${i + 1}:`, error);
     }
   }
-
-  const sections = Array.from(mergedSections.entries()).map(([name, questions]) => ({
-    name: name === "General" ? null : name,
-    questions,
-  }));
-
+  
   return {
-    sections,
+    sections: [{ name: null, questions: allQuestions }],
     metadata: {
-      total_questions: totalQuestions,
-      exam_type: examType || "custom",
-      has_negative_marking: hasNegativeMarking,
-      has_diagrams: hasDiagrams,
-      detected_sections: Array.from(detectedSections).filter(s => s !== "General"),
-    },
+      total_questions: allQuestions.length,
+      has_diagrams: false,
+      extraction_method: 'text'
+    }
   };
 }
 
@@ -454,25 +449,20 @@ serve(async (req) => {
   try {
     const { pdfContent, imageUrls, examType } = await req.json();
 
-    // Validate - must have either images or text
-    if (!imageUrls?.length && !pdfContent) {
+    // Validate input
+    if (!pdfContent && (!imageUrls || imageUrls.length === 0)) {
       return new Response(
-        JSON.stringify({ error: "PDF content or page images are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: "No content provided" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
       );
     }
 
-    const validExamTypes = ['ssc', 'banking', 'engineering', 'medical', 'upsc', 'custom'];
-    if (examType && !validExamTypes.includes(examType)) {
+    const apiKey = Deno.env.get("LOVABLE_API_KEY");
+    if (!apiKey) {
       return new Response(
-        JSON.stringify({ error: "Invalid exam type" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: "API key not configured" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
       );
-    }
-
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
     }
 
     let result;
@@ -480,51 +470,24 @@ serve(async (req) => {
     // Prefer image-based extraction if images are available
     if (imageUrls && imageUrls.length > 0) {
       console.log(`Using vision extraction with ${imageUrls.length} images`);
-      result = await extractFromImages(imageUrls, examType || 'custom', LOVABLE_API_KEY);
-    } else if (pdfContent) {
-      // Fall back to text-based extraction
-      const maxSize = 1_000_000;
-      if (typeof pdfContent !== 'string' || pdfContent.length > maxSize) {
-        return new Response(
-          JSON.stringify({ error: `PDF content too large. Maximum ${maxSize / 1000}KB allowed.` }),
-          { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      const sanitizedContent = pdfContent
-        .replace(/ignore previous instructions/gi, '')
-        .replace(/system:/gi, '')
-        .replace(/assistant:/gi, '')
-        .slice(0, maxSize);
-      
-      result = await extractFromText(sanitizedContent, examType || 'custom', LOVABLE_API_KEY);
+      result = await extractFromImages(imageUrls, examType, apiKey);
+    } else {
+      console.log(`Using text extraction`);
+      result = await extractFromText(pdfContent, examType, apiKey);
     }
-
-    if (!result || result.metadata.total_questions === 0) {
-      throw new Error("Failed to extract questions. The PDF may have an unusual format.");
-    }
-
-    console.log(`Total extracted: ${result.metadata.total_questions} questions, has_diagrams: ${result.metadata.has_diagrams}`);
 
     return new Response(
       JSON.stringify({ success: true, data: result }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Error in extract-questions:", error);
-    
-    if (error instanceof Error && error.message === "CREDITS_EXHAUSTED") {
-      return new Response(
-        JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
-        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
+    console.error("Extract questions error:", error);
     return new Response(
       JSON.stringify({ 
-        error: error instanceof Error ? error.message : "Failed to extract questions" 
+        success: false, 
+        error: error instanceof Error ? error.message : "Unknown error" 
       }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
     );
   }
 });

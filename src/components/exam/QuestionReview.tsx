@@ -34,6 +34,7 @@ export interface ExtractedQuestion {
   has_diagram?: boolean;
   diagram_description?: string;
   page_number?: number;
+  page_image_url?: string;
 }
 
 export interface ExtractedSection {
@@ -160,8 +161,31 @@ const QuestionCard = ({
       {(isExpanded || isEditing) && (
         <CardContent className="pt-0 pb-4 px-4">
           <div className="ml-10 space-y-4">
-            {/* Diagram Description */}
-            {question.has_diagram && question.diagram_description && (
+            {/* Diagram Image */}
+            {question.has_diagram && question.page_image_url && (
+              <div className="rounded-lg border border-blue-200 overflow-hidden bg-blue-50">
+                <div className="flex items-center gap-2 p-2 bg-blue-100 text-blue-700">
+                  <ImageIcon className="h-4 w-4" />
+                  <span className="text-sm font-medium">Page Image with Diagram</span>
+                  {question.page_number && (
+                    <span className="text-xs text-blue-500">(Page {question.page_number})</span>
+                  )}
+                </div>
+                <img 
+                  src={question.page_image_url} 
+                  alt={`Page ${question.page_number || ''} diagram`}
+                  className="w-full max-h-96 object-contain bg-white"
+                />
+                {question.diagram_description && (
+                  <p className="text-sm text-blue-600 p-2 border-t border-blue-200">
+                    {question.diagram_description}
+                  </p>
+                )}
+              </div>
+            )}
+            
+            {/* Diagram Description Only (when no image URL) */}
+            {question.has_diagram && !question.page_image_url && question.diagram_description && (
               <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
                 <div className="flex items-center gap-2 text-blue-700">
                   <ImageIcon className="h-4 w-4" />
