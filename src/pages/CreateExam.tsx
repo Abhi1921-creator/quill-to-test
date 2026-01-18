@@ -99,6 +99,7 @@ const CreateExam = () => {
           has_diagram: q.has_diagram || false,
           diagram_description: q.diagram_description || null,
           page_number: q.page_number || null,
+          page_image_url: q.page_image_url || null,
         })),
       }));
 
