@@ -11,6 +11,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { 
   ChevronDown, 
   ChevronUp, 
@@ -19,7 +26,9 @@ import {
   Check, 
   X,
   GripVertical,
-  ImageIcon 
+  ImageIcon,
+  ZoomIn,
+  ExternalLink
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -161,24 +170,51 @@ const QuestionCard = ({
       {(isExpanded || isEditing) && (
         <CardContent className="pt-0 pb-4 px-4">
           <div className="ml-10 space-y-4">
-            {/* Diagram Image */}
+            {/* Diagram Thumbnail with Zoom */}
             {question.has_diagram && question.page_image_url && (
               <div className="rounded-lg border border-blue-200 overflow-hidden bg-blue-50">
-                <div className="flex items-center gap-2 p-2 bg-blue-100 text-blue-700">
-                  <ImageIcon className="h-4 w-4" />
-                  <span className="text-sm font-medium">Page Image with Diagram</span>
-                  {question.page_number && (
-                    <span className="text-xs text-blue-500">(Page {question.page_number})</span>
-                  )}
+                <div className="flex items-center justify-between p-2 bg-blue-100 text-blue-700">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4" />
+                    <span className="text-sm font-medium">Diagram</span>
+                    {question.page_number && (
+                      <span className="text-xs text-blue-500">(Page {question.page_number})</span>
+                    )}
+                  </div>
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button size="sm" variant="ghost" className="h-7 gap-1 text-blue-700 hover:text-blue-900 hover:bg-blue-200">
+                        <ZoomIn className="h-3.5 w-3.5" />
+                        View Full Page
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-4xl max-h-[90vh] overflow-auto">
+                      <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                          <ImageIcon className="h-5 w-5" />
+                          Page {question.page_number || ''} - Full View
+                        </DialogTitle>
+                      </DialogHeader>
+                      <img 
+                        src={question.page_image_url} 
+                        alt={`Page ${question.page_number || ''} full view`}
+                        className="w-full object-contain"
+                      />
+                    </DialogContent>
+                  </Dialog>
                 </div>
-                <img 
-                  src={question.page_image_url} 
-                  alt={`Page ${question.page_number || ''} diagram`}
-                  className="w-full max-h-96 object-contain bg-white"
-                />
+                {/* Cropped/Focused thumbnail - shows center portion */}
+                <div className="relative h-32 overflow-hidden bg-white">
+                  <img 
+                    src={question.page_image_url} 
+                    alt={`Page ${question.page_number || ''} diagram`}
+                    className="absolute inset-0 w-full h-auto object-cover object-top scale-150 origin-top"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-white/80" />
+                </div>
                 {question.diagram_description && (
                   <p className="text-sm text-blue-600 p-2 border-t border-blue-200">
-                    {question.diagram_description}
+                    <span className="font-medium">Description: </span>{question.diagram_description}
                   </p>
                 )}
               </div>
