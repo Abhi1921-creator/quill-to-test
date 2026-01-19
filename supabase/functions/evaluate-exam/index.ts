@@ -25,6 +25,37 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Authentication check
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      console.error('No authorization header provided');
+      return new Response(
+        JSON.stringify({ error: 'Authentication required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    
+    // Create client with user's auth for verification
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    // Verify user is authenticated
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    if (authError || !user) {
+      console.error('Authentication failed:', authError?.message);
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log(`Authenticated user: ${user.id}`);
+
     const { sessionId } = await req.json();
 
     if (!sessionId) {
@@ -34,8 +65,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    // Use service role key for database operations (bypasses RLS)
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Get session details
@@ -50,6 +80,34 @@ Deno.serve(async (req) => {
         JSON.stringify({ error: 'Session not found' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Verify user is authorized for this session
+    // User must be the student who owns the session, or a teacher/admin of the exam's institute
+    const isStudent = session.student_id === user.id;
+    
+    if (!isStudent) {
+      // Check if user is a teacher/admin for this exam
+      const { data: roles } = await supabaseAuth
+        .from('user_roles')
+        .select('role, institute_id')
+        .eq('user_id', user.id);
+
+      const exam = session.exams;
+      const isAuthorized = roles?.some(r => 
+        (r.role === 'super_admin') ||
+        (r.role === 'institute_admin' && r.institute_id === exam.institute_id) ||
+        (r.role === 'teacher' && r.institute_id === exam.institute_id) ||
+        (exam.created_by === user.id)
+      );
+
+      if (!isAuthorized) {
+        console.error(`User ${user.id} not authorized for session ${sessionId}`);
+        return new Response(
+          JSON.stringify({ error: 'Not authorized to evaluate this exam session' }),
+          { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     const exam = session.exams;

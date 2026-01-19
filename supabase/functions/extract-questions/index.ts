@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -447,6 +448,62 @@ serve(async (req) => {
   }
 
   try {
+    // Authentication check
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      console.error('No authorization header provided');
+      return new Response(
+        JSON.stringify({ success: false, error: "Authentication required" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 401 }
+      );
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    // Verify user is authenticated
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) {
+      console.error('Authentication failed:', authError?.message);
+      return new Response(
+        JSON.stringify({ success: false, error: "Unauthorized" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 401 }
+      );
+    }
+
+    console.log(`Authenticated user: ${user.id}`);
+
+    // Check user has teacher or admin role
+    const { data: roles, error: rolesError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id);
+
+    if (rolesError) {
+      console.error('Failed to fetch user roles:', rolesError.message);
+      return new Response(
+        JSON.stringify({ success: false, error: "Failed to verify permissions" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 500 }
+      );
+    }
+
+    const hasPermission = roles?.some(r => 
+      ['teacher', 'institute_admin', 'super_admin'].includes(r.role)
+    );
+
+    if (!hasPermission) {
+      console.error(`User ${user.id} lacks required role. Roles: ${JSON.stringify(roles)}`);
+      return new Response(
+        JSON.stringify({ success: false, error: "Insufficient permissions. Teacher or admin role required." }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 403 }
+      );
+    }
+
+    console.log(`User ${user.id} authorized with roles: ${JSON.stringify(roles)}`);
+
     const { pdfContent, imageUrls, examType } = await req.json();
 
     // Validate input
