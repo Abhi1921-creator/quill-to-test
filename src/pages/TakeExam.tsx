@@ -140,9 +140,9 @@ const TakeExam = () => {
           setCurrentSectionId(sectionsData[0].id);
         }
 
-        // Fetch questions
+        // Fetch questions using secure view that hides correct_answer/explanation during active exam
         const { data: questionsData, error: questionsError } = await supabase
-          .from('questions')
+          .from('questions_for_students')
           .select('id, question_text, question_type, options, marks, negative_marks, section_id, order_index')
           .eq('exam_id', examId)
           .order('order_index');

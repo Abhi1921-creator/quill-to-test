@@ -415,6 +415,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "responses_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: false
+            referencedRelation: "questions_for_students"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "responses_session_id_fkey"
             columns: ["session_id"]
             isOneToOne: false
@@ -541,7 +548,72 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      questions_for_students: {
+        Row: {
+          correct_answer: Json | null
+          created_at: string | null
+          difficulty: string | null
+          exam_id: string | null
+          explanation: string | null
+          id: string | null
+          image_url: string | null
+          marks: number | null
+          negative_marks: number | null
+          options: Json | null
+          order_index: number | null
+          question_text: string | null
+          question_type: Database["public"]["Enums"]["question_type"] | null
+          section_id: string | null
+        }
+        Insert: {
+          correct_answer?: never
+          created_at?: string | null
+          difficulty?: string | null
+          exam_id?: string | null
+          explanation?: never
+          id?: string | null
+          image_url?: string | null
+          marks?: number | null
+          negative_marks?: number | null
+          options?: Json | null
+          order_index?: number | null
+          question_text?: string | null
+          question_type?: Database["public"]["Enums"]["question_type"] | null
+          section_id?: string | null
+        }
+        Update: {
+          correct_answer?: never
+          created_at?: string | null
+          difficulty?: string | null
+          exam_id?: string | null
+          explanation?: never
+          id?: string | null
+          image_url?: string | null
+          marks?: number | null
+          negative_marks?: number | null
+          options?: Json | null
+          order_index?: number | null
+          question_text?: string | null
+          question_type?: Database["public"]["Enums"]["question_type"] | null
+          section_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "questions_exam_id_fkey"
+            columns: ["exam_id"]
+            isOneToOne: false
+            referencedRelation: "exams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "questions_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "exam_sections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       get_user_institute: { Args: { _user_id: string }; Returns: string }
